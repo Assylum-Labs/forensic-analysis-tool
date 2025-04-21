@@ -5,9 +5,14 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/api';
 
 // Entity data fetching
 export const fetchEntityData = async () => {
-  const response = await fetch(`${API_BASE}/entities`);
-  if (!response.ok) throw new Error('Failed to fetch entity data');
-  return response.json();
+  try {
+    const response = await fetch(`${API_BASE}/entities`);
+    if (!response.ok) throw new Error('Failed to fetch entity data');
+    return response.json();
+  } catch (error) {
+    console.error('Error fetching entity data:', error);
+    return { entities: [] };
+  }
 };
 
 // Transaction processing utilities
@@ -20,39 +25,112 @@ export const processTransactionData = async (
   const nodes = new Map();
   const links = new Map();
   const addressTypes = new Map();
+  const addressVolumes = new Map();
+
+  // Sanitize input - filter null transactions
+  const validTransactions = transactions.filter(tx => tx && tx.meta);
+  
+  if (validTransactions.length === 0) {
+    return {
+      graphData: { nodes: [], links: [] },
+      stats: { totalTransactions: 0, uniqueAddresses: 0, totalInteractions: 0, timespan: { start: null, end: null } }
+    };
+  }
 
   // Add central wallet node
+  const centralNodeType = entities.has(centralAddress) ? 
+    mapEntityTypeToNodeType(entities.get(centralAddress).type) : 'user';
+  
   nodes.set(centralAddress, {
     id: centralAddress,
     group: 1,
-    type: entities.has(centralAddress) ? 
-      entities.get(centralAddress).type : 
-      'user',
-    volume: transactions.length
+    type: centralNodeType,
+    volume: 0,
+    label: entities.has(centralAddress) ? entities.get(centralAddress).name : '',
+    verified: entities.has(centralAddress)
   });
 
-  // Process each transaction
-  for (const tx of transactions) {
-    if (!tx?.meta) continue;
+  // First pass: collect all addresses and their volumes
+  for (const tx of validTransactions) {
+    if (!tx?.meta || !tx.transaction) continue;
 
-    console.log('tx', tx);
-    
-
-    // const accountKeys = tx.transaction.message.staticAccountKeys;
-    // const programId = tx.transaction.message.programId?.toBase58();
     const message = tx.transaction.message;
-    const accountKeys = message.staticAccountKeys;
-  
-    // Get the programId from the first instruction (if it exists)
-    let programId: string | undefined = '';
-    if (message.compiledInstructions.length > 0) {
-      programId = accountKeys[message.compiledInstructions[0].programIdIndex]?.toBase58();
+    const accountKeys = message.accountKeys || message.staticAccountKeys || [];
+    
+    // Track transaction volumes
+    accountKeys.forEach((account, index) => {
+      const address = account?.toBase58 ? account.toBase58() : account?.toString();
+      if (!address) return;
+      
+      addressVolumes.set(address, (addressVolumes.get(address) || 0) + 1);
+      
+      // For central address, update volume
+      if (address === centralAddress) {
+        nodes.get(centralAddress).volume++;
+      }
+    });
+  }
+
+  // Find top N addresses by volume (excluding the central address)
+  const MAX_NODES = 8; // Limit the number of nodes for a cleaner visualization
+  const sortedAddresses = [...addressVolumes.entries()]
+    .filter(([address]) => address !== centralAddress)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, MAX_NODES)
+    .map(([address]) => address);
+
+  // Second pass: create actual graph with filtered nodes
+  for (const tx of validTransactions) {
+    if (!tx?.meta || !tx.transaction) continue;
+
+    const message = tx.transaction.message;
+    const accountKeys = message.accountKeys || message.staticAccountKeys || [];
+    
+    // Get the programId from instructions if possible
+    let programId = '';
+    if (message.instructions && message.instructions.length > 0) {
+      const programIndex = message.instructions[0].programIdIndex;
+      programId = accountKeys[programIndex]?.toBase58 ? 
+        accountKeys[programIndex].toBase58() : 
+        accountKeys[programIndex]?.toString() || '';
+    } else if (message.compiledInstructions && message.compiledInstructions.length > 0) {
+      const programIndex = message.compiledInstructions[0].programIdIndex;
+      programId = accountKeys[programIndex]?.toBase58 ? 
+        accountKeys[programIndex].toBase58() : 
+        accountKeys[programIndex]?.toString() || '';
     }
 
-    // Track account interactions
-    accountKeys.forEach((account: any, index: number) => {
-      const address = account.toBase58();
-      if (address === centralAddress) return;
+    // Determine transaction signers and account changes
+    const signers = new Set();
+    if (tx.transaction.signatures) {
+      tx.transaction.signatures.forEach(sig => {
+        const signer = extractAddressFromSignature(sig);
+        if (signer) signers.add(signer);
+      });
+    }
+
+    // Track account balance changes
+    const preBalances = tx.meta.preBalances || [];
+    const postBalances = tx.meta.postBalances || [];
+
+    // Process account interactions
+    accountKeys.forEach((account, index) => {
+      const address = account?.toBase58 ? account.toBase58() : account?.toString();
+      if (!address || address === centralAddress || !sortedAddresses.includes(address)) return;
+
+      // Determine transaction type
+      const isSigner = signers.has(address);
+      const preBalance = preBalances[index] || 0;
+      const postBalance = postBalances[index] || 0;
+      let txType = 'transfer';
+      
+      if (postBalance > preBalance) {
+        txType = 'deposit';
+      } else if (preBalance > postBalance) {
+        txType = 'withdrawal';
+      } else if (isDexProgram(programId)) {
+        txType = 'swap';
+      }
 
       // Create or update node
       if (!nodes.has(address)) {
@@ -60,23 +138,34 @@ export const processTransactionData = async (
         nodes.set(address, {
           id: address,
           group: 2,
-          type: entityInfo?.type || detectAddressType(address, tx),
-          volume: 1,
+          type: entityInfo?.type ? mapEntityTypeToNodeType(entityInfo.type) : detectAddressType(address, programId),
+          volume: addressVolumes.get(address) || 1,
           label: entityInfo?.name || '',
           verified: entityInfo?.verified || false
         });
-      } else {
-        nodes.get(address).volume++;
       }
 
-      // Create or update link
-      const linkKey = `${centralAddress}-${address}`;
+      // Create or update link (direction based on transaction type)
+      let source, target;
+      if (txType === 'deposit') {
+        source = centralAddress;
+        target = address;
+      } else if (txType === 'withdrawal') {
+        source = address;
+        target = centralAddress;
+      } else {
+        // For transfers and swaps, use the signer as source
+        source = isSigner ? address : centralAddress;
+        target = isSigner ? centralAddress : address;
+      }
+
+      const linkKey = `${source}-${target}-${txType}`;
       if (!links.has(linkKey)) {
         links.set(linkKey, {
-          source: centralAddress,
-          target: address,
+          source,
+          target,
           value: 1,
-          type: determineTransactionType(tx, index, programId)
+          type: txType
         });
       } else {
         links.get(linkKey).value++;
@@ -84,146 +173,92 @@ export const processTransactionData = async (
     });
   }
 
-  // Process patterns and enrich data
-  const enrichedData = await enrichGraphData(
-    Array.from(nodes.values()),
-    Array.from(links.values()),
-    transactions
-  );
-
-  return {
-    graphData: enrichedData,
-    stats: generateTransactionStats(transactions, nodes, links)
-  };
-};
-
-// Helper functions
-const detectAddressType = (address: string, tx: any): string => {
-  // Check if address is a program
-  if (tx.transaction.message.staticAccountKeys.some(
-    (key: any) => key.toBase58() === address && key.signer
-  )) {
-    return 'contract';
-  }
-  return 'unknown';
-};
-
-const determineTransactionType = (
-  tx: any,
-  accountIndex: number,
-  programId: string
-): string => {
-  // Known program IDs for common protocols
-  const DEX_PROGRAMS = [
-    'JUP4', // Jupiter
-    'ORCA', // Orca
-    'RAY',  // Raydium
-  ];
-
-  if (DEX_PROGRAMS.some(id => programId?.includes(id))) {
-    return 'swap';
-  }
-
-  // Check balance changes
-  const preBalance = tx.meta.preBalances[accountIndex];
-  const postBalance = tx.meta.postBalances[accountIndex];
-
-  if (postBalance > preBalance) return 'deposit';
-  if (preBalance > postBalance) return 'withdrawal';
-  return 'transfer';
-};
-
-const enrichGraphData = async (
-  nodes: any[],
-  links: any[],
-  transactions: any[]
-) => {
-  // Group transactions by address
-  const txsByAddress = new Map();
-  transactions.forEach(tx => {
-    tx.transaction.message.staticAccountKeys.forEach((key: any) => {
-      const address = key.toBase58();
-      if (!txsByAddress.has(address)) {
-        txsByAddress.set(address, []);
-      }
-      txsByAddress.get(address).push(tx);
-    });
-  });
-
-  // Enhance nodes with pattern detection
-  const enhancedNodes = nodes.map(node => {
-    const addressTxs = txsByAddress.get(node.id) || [];
-    const patterns = detectPatterns(addressTxs);
+  // Enhance nodes with visual information
+  const enhancedNodes = Array.from(nodes.values()).map(node => {
     return {
       ...node,
-      patterns,
-      confidence: calculateConfidence(patterns)
+      // Scale node size based on volume
+      volume: Math.max(1, Math.min(10, node.volume)),
+      // For central node, use larger volume
+      ...(node.id === centralAddress ? { volume: Math.max(5, node.volume) } : {})
     };
   });
 
-  return {
-    nodes: enhancedNodes,
-    links
-  };
-};
-
-const detectPatterns = (transactions: any[]) => {
-  const patterns = [];
-
-  // Check transaction frequency
-  const timeIntervals = transactions
-    .slice(1)
-    .map((tx, i) => tx.blockTime - transactions[i].blockTime);
-  
-  const avgInterval = timeIntervals.reduce((a, b) => a + b, 0) / timeIntervals.length;
-  const isRegular = timeIntervals.every(interval => 
-    Math.abs(interval - avgInterval) < avgInterval * 0.2
-  );
-
-  if (isRegular) {
-    patterns.push({
-      type: 'regular_activity',
-      confidence: 0.8
-    });
-  }
-
-  // Check for program interactions
-  const programInteractions = new Map();
-  transactions.forEach(tx => {
-    const programId = tx.transaction.message.programId?.toBase58();
-    if (programId) {
-      programInteractions.set(programId, (programInteractions.get(programId) || 0) + 1);
-    }
+  // Enhance links with visual information
+  const enhancedLinks = Array.from(links.values()).map(link => {
+    return {
+      ...link,
+      // Normalize link strength
+      value: Math.max(1, Math.min(5, link.value))
+    };
   });
 
-  if (programInteractions.size > 0) {
-    patterns.push({
-      type: 'program_interaction',
-      confidence: 0.9,
-      programs: Array.from(programInteractions.entries())
-    });
-  }
-
-  return patterns;
-};
-
-const calculateConfidence = (patterns: any[]) => {
-  if (patterns.length === 0) return 0;
-  return patterns.reduce((acc, p) => acc + p.confidence, 0) / patterns.length;
-};
-
-const generateTransactionStats = (
-  transactions: any[],
-  nodes: Map<string, any>,
-  links: Map<string, any>
-) => {
-  return {
-    totalTransactions: transactions.length,
+  // Generate statistics
+  const stats = {
+    totalTransactions: validTransactions.length,
     uniqueAddresses: nodes.size,
     totalInteractions: links.size,
     timespan: {
-      start: transactions[transactions.length - 1]?.blockTime,
-      end: transactions[0]?.blockTime
+      start: validTransactions[validTransactions.length - 1]?.blockTime || null,
+      end: validTransactions[0]?.blockTime || null
     }
   };
+
+  return {
+    graphData: {
+      nodes: enhancedNodes,
+      links: enhancedLinks
+    },
+    stats
+  };
 };
+
+// Helper function to extract address from signature
+function extractAddressFromSignature(signature) {
+  if (typeof signature === 'string') {
+    return signature.split(':')[0];
+  }
+  return null;
+}
+
+// Helper function to detect if a program is a DEX
+function isDexProgram(programId: string): boolean {
+  const DEX_PROGRAMS = [
+    'JUP', // Jupiter
+    'ORCA', // Orca
+    'RAY',  // Raydium
+    'OPENBOOK',
+    'SERUM'
+  ];
+  
+  return programId && DEX_PROGRAMS.some(id => programId.includes(id));
+}
+
+// Helper function to detect address type based on program interactions
+function detectAddressType(address: string, programId: string): string {
+  // Known program IDs for categorization
+  if (isDexProgram(programId)) {
+    return 'dex';
+  }
+  
+  // Check if address starts with known prefixes
+  if (address.startsWith('11111111')) {
+    return 'contract';
+  }
+  
+  return 'unknown';
+}
+
+// Map entity types to node types
+function mapEntityTypeToNodeType(entityType: string): string {
+  const typeMap = {
+    'exchange': 'cex',
+    'nft_marketplace': 'dex',
+    'defi_protocol': 'dex',
+    'token': 'contract',
+    'project': 'contract',
+    'foundation': 'cex'
+  };
+  
+  return typeMap[entityType] || 'user';
+}
