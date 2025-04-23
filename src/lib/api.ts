@@ -6,7 +6,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/api';
 // Entity data fetching
 export const fetchEntityData = async () => {
   try {
-    const response = await fetch(`${API_BASE}/entities`);
+    const response = await fetch(`${API_BASE}/entities?limit=1500`);
     if (!response.ok) throw new Error('Failed to fetch entity data');
     return response.json();
   } catch (error) {
@@ -15,7 +15,36 @@ export const fetchEntityData = async () => {
   }
 };
 
-// // Transaction processing utilities
+// Token price mapping (simplified for demonstration)
+// In a real application, you would fetch these prices from an API
+const TOKEN_PRICES = {
+  'SOL': 120.00, // Example price in USD
+  // Add other token prices as needed
+};
+
+// Get token price by mint or symbol
+const getTokenPrice = (mint: string, symbol: string) => {
+  // First try to get by symbol
+  if (symbol && TOKEN_PRICES[symbol]) {
+    return TOKEN_PRICES[symbol];
+  }
+  
+  // Hardcoded prices for common tokens by mint
+  const MINT_TO_PRICE = {
+    'So11111111111111111111111111111111111111112': 120.00, // SOL
+    '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs': 1.00,  // USDC on Solana
+    'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So': 125.00, // mSOL
+  };
+  
+  if (mint && MINT_TO_PRICE[mint]) {
+    return MINT_TO_PRICE[mint];
+  }
+  
+  // Default price fallback
+  return 1.00; // Default to 1 USD if token price is unknown
+};
+
+// Transaction processing utilities
 export const processTransactionData = async (
   transactions: VersionedTransactionResponse[],
   centralAddress: string,
@@ -26,6 +55,14 @@ export const processTransactionData = async (
   const links = new Map();
   const addressVolumes = new Map();
   const tokenAccountOwners = new Map(); // Track token account -> owner relationships
+
+  // Initialize volume tracking for central address
+  addressVolumes.set(centralAddress, {
+    inVolume: 0,    // USD value of incoming transactions
+    outVolume: 0,   // USD value of outgoing transactions
+    totalVolume: 0, // Total USD value of all transactions
+    txCount: 0      // Number of transactions
+  });
 
   // Sanitize input - filter null transactions
   const validTransactions = transactions.filter(tx => tx && tx.meta);
@@ -44,7 +81,12 @@ export const processTransactionData = async (
     type: 'user',
     volume: 0,
     label: '',
-    verified: false
+    verified: false,
+    inVolume: 0,
+    outVolume: 0,
+    netVolume: 0,
+    totalVolume: 0,
+    txCount: 0
   });
 
   // First, identify all token accounts and their owners
@@ -166,20 +208,30 @@ export const processTransactionData = async (
       const diff = data.postBal - data.preBal;
       
       if (diff < 0) {
+        // Calculate USD value of sent tokens
+        const tokenPrice = getTokenPrice(data.mint, data.symbol);
+        const usdValue = Math.abs(diff) * tokenPrice;
+        
         senders.push({
           tokenAccount,
           owner: data.owner,
           mint: data.mint,
           symbol: data.symbol,
-          amount: Math.abs(diff)
+          amount: Math.abs(diff),
+          usdValue: usdValue
         });
       } else if (diff > 0) {
+        // Calculate USD value of received tokens
+        const tokenPrice = getTokenPrice(data.mint, data.symbol);
+        const usdValue = diff * tokenPrice;
+        
         receivers.push({
           tokenAccount,
           owner: data.owner,
           mint: data.mint,
           symbol: data.symbol,
-          amount: diff
+          amount: diff,
+          usdValue: usdValue
         });
       }
     }
@@ -204,6 +256,10 @@ export const processTransactionData = async (
               // Skip self-transfers within primary wallet's accounts
               if (receiver.owner === centralAddress) return;
               
+              // Use the smaller value between sender and receiver for safety
+              const transferAmount = Math.min(sender.amount, receiver.amount);
+              const transferUsdValue = Math.min(sender.usdValue, receiver.usdValue);
+              
               // Add receiver node
               if (!nodes.has(receiver.owner)) {
                 nodes.set(receiver.owner, {
@@ -212,9 +268,34 @@ export const processTransactionData = async (
                   type: 'user',
                   volume: 0,
                   label: '',
-                  verified: false
+                  verified: false,
+                  inVolume: 0,
+                  outVolume: 0,
+                  netVolume: 0,
+                  totalVolume: 0,
+                  txCount: 0
+                });
+                
+                // Initialize volume tracking for this address
+                addressVolumes.set(receiver.owner, {
+                  inVolume: 0,
+                  outVolume: 0,
+                  totalVolume: 0,
+                  txCount: 0
                 });
               }
+              
+              // Update volume stats for receiver
+              const receiverVolume = addressVolumes.get(receiver.owner);
+              receiverVolume.inVolume += transferUsdValue;
+              receiverVolume.totalVolume += transferUsdValue;
+              receiverVolume.txCount += 1;
+              
+              // Update volume stats for sender
+              const centralVolume = addressVolumes.get(centralAddress);
+              centralVolume.outVolume += transferUsdValue;
+              centralVolume.totalVolume += transferUsdValue;
+              centralVolume.txCount += 1;
               
               nodes.get(receiver.owner).volume++;
               nodes.get(centralAddress).volume++;
@@ -229,11 +310,16 @@ export const processTransactionData = async (
                   type: 'transfer',
                   tokenMint: sender.mint,
                   tokenSymbol: sender.symbol,
-                  amount: Math.min(sender.amount, receiver.amount) // Use smaller amount to be safe
+                  amount: transferAmount,
+                  usdValue: transferUsdValue,
+                  count: 1 // Initialize count
                 });
               } else {
-                links.get(linkKey).value++;
-                links.get(linkKey).amount += Math.min(sender.amount, receiver.amount);
+                const link = links.get(linkKey);
+                link.value++;
+                link.amount += transferAmount;
+                link.usdValue += transferUsdValue;
+                link.count += 1;
               }
             });
           } else {
@@ -243,6 +329,10 @@ export const processTransactionData = async (
                 // Skip if sender is also primary wallet (already handled above)
                 if (sender.owner === centralAddress) return;
                 
+                // Use the smaller value between sender and receiver for safety
+                const transferAmount = Math.min(sender.amount, receiver.amount);
+                const transferUsdValue = Math.min(sender.usdValue, receiver.usdValue);
+                
                 // Add sender node
                 if (!nodes.has(sender.owner)) {
                   nodes.set(sender.owner, {
@@ -251,9 +341,34 @@ export const processTransactionData = async (
                     type: 'user',
                     volume: 0,
                     label: '',
-                    verified: false
+                    verified: false,
+                    inVolume: 0,
+                    outVolume: 0,
+                    netVolume: 0,
+                    totalVolume: 0,
+                    txCount: 0
+                  });
+                  
+                  // Initialize volume tracking for this address
+                  addressVolumes.set(sender.owner, {
+                    inVolume: 0,
+                    outVolume: 0,
+                    totalVolume: 0,
+                    txCount: 0
                   });
                 }
+                
+                // Update volume stats for sender
+                const senderVolume = addressVolumes.get(sender.owner);
+                senderVolume.outVolume += transferUsdValue;
+                senderVolume.totalVolume += transferUsdValue;
+                senderVolume.txCount += 1;
+                
+                // Update volume stats for central address
+                const centralVolume = addressVolumes.get(centralAddress);
+                centralVolume.inVolume += transferUsdValue;
+                centralVolume.totalVolume += transferUsdValue;
+                centralVolume.txCount += 1;
                 
                 nodes.get(sender.owner).volume++;
                 nodes.get(centralAddress).volume++;
@@ -268,11 +383,16 @@ export const processTransactionData = async (
                     type: 'transfer',
                     tokenMint: sender.mint,
                     tokenSymbol: sender.symbol,
-                    amount: Math.min(sender.amount, receiver.amount) // Use smaller amount to be safe
+                    amount: transferAmount,
+                    usdValue: transferUsdValue,
+                    count: 1 // Initialize count
                   });
                 } else {
-                  links.get(linkKey).value++;
-                  links.get(linkKey).amount += Math.min(sender.amount, receiver.amount);
+                  const link = links.get(linkKey);
+                  link.value++;
+                  link.amount += transferAmount;
+                  link.usdValue += transferUsdValue;
+                  link.count += 1;
                 }
               });
           }
@@ -310,6 +430,10 @@ export const processTransactionData = async (
             // Found a receiver - skip if it's another primary wallet account
             if (isPrimaryWalletOrATA(receiverAddress)) continue;
             
+            // Calculate USD value
+            const solPrice = getTokenPrice('So11111111111111111111111111111111111111112', 'SOL');
+            const transferUsdValue = receiverGain * solPrice;
+            
             // Add receiver node
             if (!nodes.has(receiverAddress)) {
               nodes.set(receiverAddress, {
@@ -318,9 +442,33 @@ export const processTransactionData = async (
                 type: 'user',
                 volume: 0,
                 label: '',
-                verified: false
+                verified: false,
+                inVolume: 0,
+                outVolume: 0,
+                netVolume: 0,
+                totalVolume: 0,
+                txCount: 0
+              });
+              
+              // Initialize volume tracking for this address
+              addressVolumes.set(receiverAddress, {
+                inVolume: 0,
+                outVolume: 0,
+                totalVolume: 0,
+                txCount: 0
               });
             }
+            
+            // Update volume metrics
+            const receiverVolume = addressVolumes.get(receiverAddress);
+            receiverVolume.inVolume += transferUsdValue;
+            receiverVolume.totalVolume += transferUsdValue;
+            receiverVolume.txCount += 1;
+            
+            const centralVolume = addressVolumes.get(centralAddress);
+            centralVolume.outVolume += transferUsdValue;
+            centralVolume.totalVolume += transferUsdValue;
+            centralVolume.txCount += 1;
             
             nodes.get(receiverAddress).volume++;
             nodes.get(centralAddress).volume++;
@@ -335,11 +483,16 @@ export const processTransactionData = async (
                 type: 'transfer',
                 tokenMint: 'SOL',
                 tokenSymbol: 'SOL',
-                amount: receiverGain
+                amount: receiverGain,
+                usdValue: transferUsdValue,
+                count: 1 // Initialize count
               });
             } else {
-              links.get(linkKey).value++;
-              links.get(linkKey).amount += receiverGain;
+              const link = links.get(linkKey);
+              link.value++;
+              link.amount += receiverGain;
+              link.usdValue += transferUsdValue;
+              link.count += 1;
             }
           }
         }
@@ -348,8 +501,6 @@ export const processTransactionData = async (
       // If a non-primary account lost SOL and primary wallet gained SOL
       else if (!isPrimaryAccount && adjustedDiff < 0) {
         // Check if primary wallet gained SOL
-        let primaryGained = false;
-        
         for (let j = 0; j < accountAddresses.length; j++) {
           const potentialReceiver = accountAddresses[j];
           if (isPrimaryWalletOrATA(potentialReceiver)) {
@@ -358,7 +509,10 @@ export const processTransactionData = async (
             const receiverGain = (receiverPostBal - receiverPreBal) / 1e9;
             
             if (receiverGain > 0) {
-              primaryGained = true;
+              // Calculate USD value
+              const solPrice = getTokenPrice('So11111111111111111111111111111111111111112', 'SOL');
+              const transferAmount = Math.min(Math.abs(adjustedDiff), receiverGain);
+              const transferUsdValue = transferAmount * solPrice;
               
               // Add sender node
               if (!nodes.has(address)) {
@@ -368,9 +522,33 @@ export const processTransactionData = async (
                   type: 'user',
                   volume: 0,
                   label: '',
-                  verified: false
+                  verified: false,
+                  inVolume: 0,
+                  outVolume: 0,
+                  netVolume: 0,
+                  totalVolume: 0,
+                  txCount: 0
+                });
+                
+                // Initialize volume tracking for this address
+                addressVolumes.set(address, {
+                  inVolume: 0,
+                  outVolume: 0,
+                  totalVolume: 0,
+                  txCount: 0
                 });
               }
+              
+              // Update volume metrics
+              const senderVolume = addressVolumes.get(address);
+              senderVolume.outVolume += transferUsdValue;
+              senderVolume.totalVolume += transferUsdValue;
+              senderVolume.txCount += 1;
+              
+              const centralVolume = addressVolumes.get(centralAddress);
+              centralVolume.inVolume += transferUsdValue;
+              centralVolume.totalVolume += transferUsdValue;
+              centralVolume.txCount += 1;
               
               nodes.get(address).volume++;
               nodes.get(centralAddress).volume++;
@@ -385,11 +563,16 @@ export const processTransactionData = async (
                   type: 'transfer',
                   tokenMint: 'SOL',
                   tokenSymbol: 'SOL',
-                  amount: Math.min(Math.abs(adjustedDiff), receiverGain)
+                  amount: transferAmount,
+                  usdValue: transferUsdValue,
+                  count: 1 // Initialize count
                 });
               } else {
-                links.get(linkKey).value++;
-                links.get(linkKey).amount += Math.min(Math.abs(adjustedDiff), receiverGain);
+                const link = links.get(linkKey);
+                link.value++;
+                link.amount += transferAmount;
+                link.usdValue += transferUsdValue;
+                link.count += 1;
               }
               
               break; // Found primary wallet receiving SOL
@@ -397,6 +580,32 @@ export const processTransactionData = async (
           }
         }
       }
+    }
+  }
+
+  // Calculate net volume for all addresses and update nodes
+  for (const [address, volumeData] of addressVolumes.entries()) {
+    if (nodes.has(address)) {
+      const node = nodes.get(address);
+      node.inVolume = volumeData.inVolume;
+      node.outVolume = volumeData.outVolume;
+      node.netVolume = volumeData.inVolume - volumeData.outVolume;
+      node.totalVolume = volumeData.totalVolume;
+      node.txCount = volumeData.txCount;
+    }
+  }
+
+  // Check for known entities and enrich node data
+  for (const [address, node] of nodes.entries()) {
+    // Check if this address is a known entity
+    if (entities.has(address)) {
+      const entityData = entities.get(address);
+      node.label = entityData.name;
+      node.type = mapEntityTypeToNodeType(entityData.type);
+      node.entityType = entityData.type;
+      node.verified = entityData.verified;
+      node.description = entityData.description;
+      node.website = entityData.website;
     }
   }
 
@@ -439,14 +648,6 @@ export const processTransactionData = async (
     stats
   };
 };
-
-// Helper function to extract address from signature
-function extractAddressFromSignature(signature) {
-  if (typeof signature === 'string') {
-    return signature.split(':')[0];
-  }
-  return null;
-}
 
 // Helper function to detect if a program is a DEX
 function isDexProgram(programId: string): boolean {

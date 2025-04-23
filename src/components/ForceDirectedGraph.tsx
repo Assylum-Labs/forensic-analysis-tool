@@ -12,13 +12,26 @@ interface Node {
   volume?: number;
   label?: string;
   verified?: boolean;
+  inVolume?: number;
+  outVolume?: number;
+  netVolume?: number;
+  totalVolume?: number;
+  txCount?: number;
+  entityType?: string;
+  description?: string;
+  website?: string;
 }
 
 interface Link {
-  source: string;
-  target: string;
+  source: string | Node;
+  target: string | Node;
   value: number;
   type?: 'deposit' | 'withdrawal' | 'swap' | 'transfer';
+  tokenMint?: string;
+  tokenSymbol?: string;
+  amount?: number;
+  usdValue?: number;
+  count?: number;
 }
 
 interface GraphData {
@@ -58,6 +71,17 @@ const ForceDirectedGraph = ({
   const formatAddress = (address: string, length = 4) => {
     if (!address) return '';
     return `${address.slice(0, length)}...${address.slice(-length)}`;
+  };
+
+  // Format currency for display
+  const formatCurrency = (amount: number): string => {
+    if (amount === undefined || amount === null) return '$0';
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }).format(amount);
   };
 
   useEffect(() => {
@@ -223,26 +247,53 @@ const ForceDirectedGraph = ({
     // Node hover handling for tooltip
     node
       .on("mouseover", (event, d) => {
-        console.log('data', d);
+        let headerType = 'WALLET';
+        if (d.type === 'dex') headerType = 'DAPP';
+        else if (d.type === 'cex') headerType = 'EXCHANGE';
+        else if (d.type === 'contract') headerType = 'CONTRACT';
         
-        const nodeType = d.type || 'unknown';
-        const htmlContent = `
-          <div class="font-medium">${d.label || formatAddress(d.id, 8)}</div>
-          <div class="text-xs text-muted-foreground mt-1">Type: ${nodeType.toUpperCase()}</div>
-          ${d.volume ? `<div class="text-xs mt-1">Volume: ${d.volume} transactions</div>` : ''}
-          ${d.verified ? '<div class="text-xs text-solana-green mt-1">Verified Entity</div>' : ''}
-          <div class="text-xs mt-1">${formatAddress(d.id, 12)}</div>
-        `;
+        // Format different tooltips based on node type and available data
+        let htmlContent = '';
+        
+        if (d.label) {
+          // Entity tooltip with name and volume info
+          htmlContent = `
+            <div class="font-bold text-sm">${headerType}</div>
+            <div class="mt-1">
+              <div class="font-medium">Name: ${d.label}</div>
+              ${d.entityType ? `<div class="text-xs text-muted-foreground">Type: ${d.entityType.toUpperCase()}</div>` : ''}
+              ${d.verified ? '<div class="text-xs text-solana-green">✓ Verified Entity</div>' : ''}
+            </div>
+            <div class="mt-2">
+              <div class="text-sm">In Vol: ${formatCurrency(d.inVolume || 0)}</div>
+              <div class="text-sm">Out Vol: ${formatCurrency(d.outVolume || 0)}</div>
+              <div class="text-sm">Net Vol: ${formatCurrency(d.netVolume || 0)}</div>
+              <div class="text-sm">Total Vol: ${formatCurrency(d.totalVolume || 0)}</div>
+            </div>
+            <div class="text-xs mt-2 text-muted-foreground">${formatAddress(d.id, 12)}</div>
+          `;
+        } else {
+          // Regular wallet tooltip
+          htmlContent = `
+            <div class="font-bold text-sm">${headerType}</div>
+            <div class="mt-1">
+              <div class="font-medium">Address: ${formatAddress(d.id, 8)}</div>
+              ${d.type ? `<div class="text-xs text-muted-foreground">Type: ${d.type.toUpperCase()}</div>` : ''}
+            </div>
+            <div class="mt-2">
+              <div class="text-sm">In Vol: ${formatCurrency(d.inVolume || 0)}</div>
+              <div class="text-sm">Out Vol: ${formatCurrency(d.outVolume || 0)}</div>
+              <div class="text-sm">Net Vol: ${formatCurrency(d.netVolume || 0)}</div>
+              <div class="text-sm">Total Vol: ${formatCurrency(d.totalVolume || 0)}</div>
+            </div>
+          `;
+        }
         
         setTooltip({
           visible: true,
           content: htmlContent,
           x: event.layerX,
           y: event.layerY
-          // x: event.layerX,
-          // y: event.layerY
-          // x: event.pageX,
-          // y: event.pageY
         });
       })
       .on("mousemove", (event) => {
@@ -269,15 +320,30 @@ const ForceDirectedGraph = ({
         const targetName = targetNode?.label || formatAddress(target, 6);
         
         const transactionType = d.type || 'transfer';
-        const transactionValue = d.value || 1;
+        const transactionValue = d.usdValue ? formatCurrency(d.usdValue) : '$0';
+        const transactionCount = d.count || 1;
         
+        // Transaction tooltip showing transfer details
         const htmlContent = `
-          <div class="font-medium text-xs">${transactionType.toUpperCase()} Transaction</div>
-          <div class="mt-1">
-            <div class="text-xs">From: <span class="font-medium">${sourceName}</span></div>
-            <div class="text-xs">To: <span class="font-medium">${targetName}</span></div>
+          <div class="font-bold text-sm">TRANSFER</div>
+          <div class="mt-2">
+            <div class="text-sm">Volume: ${transactionValue}</div>
+            <div class="text-sm">Count: ${transactionCount}</div>
           </div>
-          <div class="text-xs mt-1">Activity: ${transactionValue} transaction${transactionValue > 1 ? 's' : ''}</div>
+          <div class="mt-2 grid grid-cols-2 gap-x-2">
+            <div class="text-xs text-muted-foreground">From:</div>
+            <div class="text-xs font-medium">${sourceName}</div>
+            <div class="text-xs text-muted-foreground">To:</div>
+            <div class="text-xs font-medium">${targetName}</div>
+            ${d.tokenSymbol ? `
+              <div class="text-xs text-muted-foreground">Token:</div>
+              <div class="text-xs font-medium">${d.tokenSymbol}</div>
+              ${d.amount ? `
+                <div class="text-xs text-muted-foreground">Amount:</div>
+                <div class="text-xs font-medium">${d.amount.toFixed(6)} ${d.tokenSymbol}</div>
+              ` : ''}
+            ` : ''}
+          </div>
         `;
         
         setTooltip({
@@ -285,8 +351,6 @@ const ForceDirectedGraph = ({
           content: htmlContent,
           x: event.layerX,
           y: event.layerY
-          // x: event.pageX,
-          // y: event.pageY
         });
         
         // Highlight the connection
@@ -399,7 +463,6 @@ const ForceDirectedGraph = ({
             top: (tooltip.y + 25) + 'px',
             maxWidth: '250px',
             pointerEvents: 'none',
-            // transform: 'translateX(-50%)',
           }}
           dangerouslySetInnerHTML={{ __html: tooltip.content }}
         />
