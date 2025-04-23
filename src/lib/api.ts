@@ -45,16 +45,22 @@ const getTokenPrice = (mint: string, symbol: string) => {
 };
 
 // Transaction processing utilities
+// processTransactionData function with simplified token view
 export const processTransactionData = async (
   transactions: VersionedTransactionResponse[],
   centralAddress: string,
-  entities: Map<string, any>
+  entities: Map<string, any>,
+  viewMode: 'wallet' | 'token' = 'wallet'
 ) => {
   // Initialize data structures
   const nodes = new Map();
   const links = new Map();
   const addressVolumes = new Map();
   const tokenAccountOwners = new Map(); // Track token account -> owner relationships
+  const tokenAccountMints = new Map(); // Track token account -> mint
+  const mintToSymbol = new Map(); // Track mint address -> token symbol
+  const tokenMints = new Set(); // Track all token mints
+  const mintVolumes = new Map(); // Track volume per token mint
 
   // Initialize volume tracking for central address
   addressVolumes.set(centralAddress, {
@@ -70,26 +76,22 @@ export const processTransactionData = async (
   if (validTransactions.length === 0) {
     return {
       graphData: { nodes: [], links: [] },
-      stats: { totalTransactions: 0, uniqueAddresses: 0, totalInteractions: 0, timespan: { start: null, end: null } }
+      tokenData: {
+        tokenMints: [],
+        tokenSymbols: {},
+        ataToOwner: {},
+        ataToMint: {}
+      },
+      stats: { 
+        totalTransactions: 0, 
+        uniqueAddresses: 0, 
+        totalInteractions: 0, 
+        timespan: { start: null, end: null } 
+      }
     };
   }
 
-  // Add central wallet node
-  nodes.set(centralAddress, {
-    id: centralAddress,
-    group: 1, // Primary wallet
-    type: 'user',
-    volume: 0,
-    label: '',
-    verified: false,
-    inVolume: 0,
-    outVolume: 0,
-    netVolume: 0,
-    totalVolume: 0,
-    txCount: 0
-  });
-
-  // First, identify all token accounts and their owners
+  // STEP 1: Identify all token accounts, owners, and mints
   for (const tx of validTransactions) {
     if (!tx?.meta || !tx.transaction) continue;
     
@@ -107,17 +109,77 @@ export const processTransactionData = async (
     const allTokenBalances = [...preTokenBalances, ...postTokenBalances];
     
     for (const balance of allTokenBalances) {
-      // Safely map token accounts to owners
-      if (balance && balance.owner && balance.accountIndex !== undefined && 
+      // Safely map token accounts to owners and mints
+      if (balance && balance.accountIndex !== undefined && 
           balance.accountIndex < accountAddresses.length) {
         const tokenAccount = accountAddresses[balance.accountIndex];
         if (tokenAccount) {
-          tokenAccountOwners.set(tokenAccount, balance.owner);
+          if (balance.owner) {
+            tokenAccountOwners.set(tokenAccount, balance.owner);
+          }
+          if (balance.mint) {
+            tokenAccountMints.set(tokenAccount, balance.mint);
+            
+            // Track token mints
+            tokenMints.add(balance.mint);
+            
+            // Store token symbol if available
+            if (balance.uiTokenAmount && 
+                balance.uiTokenAmount.uiAmountString) {
+              const symbol = balance.uiTokenAmount.uiAmountString.replace(/[0-9.]/g, '').trim();
+              if (symbol) {
+                mintToSymbol.set(balance.mint, symbol);
+              }
+            }
+          }
         }
       }
     }
   }
   
+  // Add central wallet node for both views
+  nodes.set(centralAddress, {
+    id: centralAddress,
+    group: 1, // Primary wallet
+    type: 'user',
+    tokenType: viewMode === 'token' ? 'wallet' : undefined,
+    volume: 0,
+    label: '',
+    verified: false,
+    inVolume: 0,
+    outVolume: 0,
+    netVolume: 0,
+    totalVolume: 0,
+    txCount: 0
+  });
+
+  // For token view, add nodes for token mints
+  if (viewMode === 'token') {
+    // Add nodes for all token mints
+    for (const mint of tokenMints) {
+      nodes.set(mint, {
+        id: mint,
+        group: 2, // Token mint group
+        tokenType: 'mint',
+        tokenMint: mint,
+        tokenSymbol: mintToSymbol.get(mint) || 'Unknown',
+        volume: 5, // Make mint nodes visually prominent
+        label: mintToSymbol.get(mint) || 'Token',
+        verified: false,
+        inVolume: 0,
+        outVolume: 0,
+        netVolume: 0,
+        totalVolume: 0
+      });
+      
+      // Initialize volume tracking for token mints
+      mintVolumes.set(mint, {
+        totalVolume: 0,
+        txCount: 0
+      });
+    }
+  }
+
   // Check if an address is the primary wallet or one of its ATAs/PDAs
   const isPrimaryWalletOrATA = (address) => {
     // Direct match with primary address
@@ -128,7 +190,7 @@ export const processTransactionData = async (
     return owner === centralAddress;
   };
 
-  // Process each transaction
+  // STEP 2: Process each transaction
   for (const tx of validTransactions) {
     if (!tx?.meta || !tx.transaction) continue;
 
@@ -153,7 +215,7 @@ export const processTransactionData = async (
     const postTokenBalances = tx.meta.postTokenBalances || [];
     const fee = tx.meta.fee || 0;
     
-    // 1. Process Token Transfers
+    // Process Token Transfers
     // Map token accounts to their pre/post balances for easy lookup
     const tokenAccountMap = new Map();
     
@@ -260,83 +322,26 @@ export const processTransactionData = async (
               const transferAmount = Math.min(sender.amount, receiver.amount);
               const transferUsdValue = Math.min(sender.usdValue, receiver.usdValue);
               
-              // Add receiver node
-              if (!nodes.has(receiver.owner)) {
-                nodes.set(receiver.owner, {
-                  id: receiver.owner,
-                  group: 2,
-                  type: 'user',
-                  volume: 0,
-                  label: '',
-                  verified: false,
-                  inVolume: 0,
-                  outVolume: 0,
-                  netVolume: 0,
-                  totalVolume: 0,
-                  txCount: 0
-                });
-                
-                // Initialize volume tracking for this address
-                addressVolumes.set(receiver.owner, {
-                  inVolume: 0,
-                  outVolume: 0,
-                  totalVolume: 0,
-                  txCount: 0
-                });
-              }
-              
-              // Update volume stats for receiver
-              const receiverVolume = addressVolumes.get(receiver.owner);
-              receiverVolume.inVolume += transferUsdValue;
-              receiverVolume.totalVolume += transferUsdValue;
-              receiverVolume.txCount += 1;
-              
-              // Update volume stats for sender
-              const centralVolume = addressVolumes.get(centralAddress);
-              centralVolume.outVolume += transferUsdValue;
-              centralVolume.totalVolume += transferUsdValue;
-              centralVolume.txCount += 1;
-              
-              nodes.get(receiver.owner).volume++;
-              nodes.get(centralAddress).volume++;
-              
-              // Create link
-              const linkKey = `${centralAddress}-${receiver.owner}-${sender.mint}`;
-              if (!links.has(linkKey)) {
-                links.set(linkKey, {
-                  source: centralAddress,
-                  target: receiver.owner,
-                  value: 1,
-                  type: 'transfer',
-                  tokenMint: sender.mint,
-                  tokenSymbol: sender.symbol,
-                  amount: transferAmount,
-                  usdValue: transferUsdValue,
-                  count: 1 // Initialize count
-                });
+              if (viewMode === 'token') {
+                // TOKEN VIEW: Sender -> Token Mint -> Receiver
+                processTokenTransferThroughMint(
+                  centralAddress,
+                  receiver.owner,
+                  sender.mint,
+                  sender.symbol,
+                  transferAmount,
+                  transferUsdValue,
+                  nodes,
+                  links,
+                  addressVolumes,
+                  mintVolumes
+                );
               } else {
-                const link = links.get(linkKey);
-                link.value++;
-                link.amount += transferAmount;
-                link.usdValue += transferUsdValue;
-                link.count += 1;
-              }
-            });
-          } else {
-            // Primary wallet is receiving from others
-            matchingReceivers.filter(r => isPrimaryWalletOrATA(r.tokenAccount) || r.owner === centralAddress)
-              .forEach(receiver => {
-                // Skip if sender is also primary wallet (already handled above)
-                if (sender.owner === centralAddress) return;
-                
-                // Use the smaller value between sender and receiver for safety
-                const transferAmount = Math.min(sender.amount, receiver.amount);
-                const transferUsdValue = Math.min(sender.usdValue, receiver.usdValue);
-                
-                // Add sender node
-                if (!nodes.has(sender.owner)) {
-                  nodes.set(sender.owner, {
-                    id: sender.owner,
+                // WALLET VIEW
+                // Add receiver node
+                if (!nodes.has(receiver.owner)) {
+                  nodes.set(receiver.owner, {
+                    id: receiver.owner,
                     group: 2,
                     type: 'user',
                     volume: 0,
@@ -350,7 +355,7 @@ export const processTransactionData = async (
                   });
                   
                   // Initialize volume tracking for this address
-                  addressVolumes.set(sender.owner, {
+                  addressVolumes.set(receiver.owner, {
                     inVolume: 0,
                     outVolume: 0,
                     totalVolume: 0,
@@ -358,27 +363,27 @@ export const processTransactionData = async (
                   });
                 }
                 
-                // Update volume stats for sender
-                const senderVolume = addressVolumes.get(sender.owner);
-                senderVolume.outVolume += transferUsdValue;
-                senderVolume.totalVolume += transferUsdValue;
-                senderVolume.txCount += 1;
+                // Update volume stats for receiver
+                const receiverVolume = addressVolumes.get(receiver.owner);
+                receiverVolume.inVolume += transferUsdValue;
+                receiverVolume.totalVolume += transferUsdValue;
+                receiverVolume.txCount += 1;
                 
-                // Update volume stats for central address
+                // Update volume stats for sender
                 const centralVolume = addressVolumes.get(centralAddress);
-                centralVolume.inVolume += transferUsdValue;
+                centralVolume.outVolume += transferUsdValue;
                 centralVolume.totalVolume += transferUsdValue;
                 centralVolume.txCount += 1;
                 
-                nodes.get(sender.owner).volume++;
+                nodes.get(receiver.owner).volume++;
                 nodes.get(centralAddress).volume++;
                 
                 // Create link
-                const linkKey = `${sender.owner}-${centralAddress}-${sender.mint}`;
+                const linkKey = `${centralAddress}-${receiver.owner}-${sender.mint}`;
                 if (!links.has(linkKey)) {
                   links.set(linkKey, {
-                    source: sender.owner,
-                    target: centralAddress,
+                    source: centralAddress,
+                    target: receiver.owner,
                     value: 1,
                     type: 'transfer',
                     tokenMint: sender.mint,
@@ -394,13 +399,104 @@ export const processTransactionData = async (
                   link.usdValue += transferUsdValue;
                   link.count += 1;
                 }
+              }
+            });
+          } else {
+            // Primary wallet is receiving from others
+            matchingReceivers.filter(r => isPrimaryWalletOrATA(r.tokenAccount) || r.owner === centralAddress)
+              .forEach(receiver => {
+                // Skip if sender is also primary wallet (already handled above)
+                if (sender.owner === centralAddress) return;
+                
+                // Use the smaller value between sender and receiver for safety
+                const transferAmount = Math.min(sender.amount, receiver.amount);
+                const transferUsdValue = Math.min(sender.usdValue, receiver.usdValue);
+                
+                if (viewMode === 'token') {
+                  // TOKEN VIEW: Sender -> Token Mint -> Receiver (central wallet)
+                  processTokenTransferThroughMint(
+                    sender.owner,
+                    centralAddress,
+                    sender.mint,
+                    sender.symbol,
+                    transferAmount,
+                    transferUsdValue,
+                    nodes,
+                    links,
+                    addressVolumes,
+                    mintVolumes
+                  );
+                } else {
+                  // WALLET VIEW
+                  // Add sender node
+                  if (!nodes.has(sender.owner)) {
+                    nodes.set(sender.owner, {
+                      id: sender.owner,
+                      group: 2,
+                      type: 'user',
+                      volume: 0,
+                      label: '',
+                      verified: false,
+                      inVolume: 0,
+                      outVolume: 0,
+                      netVolume: 0,
+                      totalVolume: 0,
+                      txCount: 0
+                    });
+                    
+                    // Initialize volume tracking for this address
+                    addressVolumes.set(sender.owner, {
+                      inVolume: 0,
+                      outVolume: 0,
+                      totalVolume: 0,
+                      txCount: 0
+                    });
+                  }
+                  
+                  // Update volume stats for sender
+                  const senderVolume = addressVolumes.get(sender.owner);
+                  senderVolume.outVolume += transferUsdValue;
+                  senderVolume.totalVolume += transferUsdValue;
+                  senderVolume.txCount += 1;
+                  
+                  // Update volume stats for central address
+                  const centralVolume = addressVolumes.get(centralAddress);
+                  centralVolume.inVolume += transferUsdValue;
+                  centralVolume.totalVolume += transferUsdValue;
+                  centralVolume.txCount += 1;
+                  
+                  nodes.get(sender.owner).volume++;
+                  nodes.get(centralAddress).volume++;
+                  
+                  // Create link
+                  const linkKey = `${sender.owner}-${centralAddress}-${sender.mint}`;
+                  if (!links.has(linkKey)) {
+                    links.set(linkKey, {
+                      source: sender.owner,
+                      target: centralAddress,
+                      value: 1,
+                      type: 'transfer',
+                      tokenMint: sender.mint,
+                      tokenSymbol: sender.symbol,
+                      amount: transferAmount,
+                      usdValue: transferUsdValue,
+                      count: 1 // Initialize count
+                    });
+                  } else {
+                    const link = links.get(linkKey);
+                    link.value++;
+                    link.amount += transferAmount;
+                    link.usdValue += transferUsdValue;
+                    link.count += 1;
+                  }
+                }
               });
           }
         }
       }
     });
     
-    // 2. Process native SOL transfers and rent payments
+    // Process native SOL transfers - handle differently based on view mode
     for (let i = 0; i < accountAddresses.length; i++) {
       const address = accountAddresses[i];
       const preBal = preBalances[i] || 0;
@@ -434,69 +530,110 @@ export const processTransactionData = async (
             const solPrice = getTokenPrice('So11111111111111111111111111111111111111112', 'SOL');
             const transferUsdValue = receiverGain * solPrice;
             
-            // Add receiver node
-            if (!nodes.has(receiverAddress)) {
-              nodes.set(receiverAddress, {
-                id: receiverAddress,
-                group: 2,
-                type: 'user',
-                volume: 0,
-                label: '',
-                verified: false,
-                inVolume: 0,
-                outVolume: 0,
-                netVolume: 0,
-                totalVolume: 0,
-                txCount: 0
-              });
+            if (viewMode === 'token') {
+              // TOKEN VIEW: For SOL, use SOL mint node
+              const solMint = 'So11111111111111111111111111111111111111112';
+              processTokenTransferThroughMint(
+                centralAddress,
+                receiverAddress,
+                solMint,
+                'SOL',
+                receiverGain,
+                transferUsdValue,
+                nodes,
+                links,
+                addressVolumes,
+                mintVolumes
+              );
               
-              // Initialize volume tracking for this address
-              addressVolumes.set(receiverAddress, {
-                inVolume: 0,
-                outVolume: 0,
-                totalVolume: 0,
-                txCount: 0
-              });
-            }
-            
-            // Update volume metrics
-            const receiverVolume = addressVolumes.get(receiverAddress);
-            receiverVolume.inVolume += transferUsdValue;
-            receiverVolume.totalVolume += transferUsdValue;
-            receiverVolume.txCount += 1;
-            
-            const centralVolume = addressVolumes.get(centralAddress);
-            centralVolume.outVolume += transferUsdValue;
-            centralVolume.totalVolume += transferUsdValue;
-            centralVolume.txCount += 1;
-            
-            nodes.get(receiverAddress).volume++;
-            nodes.get(centralAddress).volume++;
-            
-            // Create link from primary to receiver
-            const linkKey = `${centralAddress}-${receiverAddress}-SOL`;
-            if (!links.has(linkKey)) {
-              links.set(linkKey, {
-                source: centralAddress,
-                target: receiverAddress,
-                value: 1,
-                type: 'transfer',
-                tokenMint: 'SOL',
-                tokenSymbol: 'SOL',
-                amount: receiverGain,
-                usdValue: transferUsdValue,
-                count: 1 // Initialize count
-              });
+              // Ensure SOL mint node exists
+              if (!nodes.has(solMint)) {
+                nodes.set(solMint, {
+                  id: solMint,
+                  group: 2,
+                  tokenType: 'mint',
+                  tokenMint: solMint,
+                  tokenSymbol: 'SOL',
+                  volume: 5,
+                  label: 'SOL',
+                  verified: true,
+                  inVolume: 0,
+                  outVolume: 0,
+                  netVolume: 0,
+                  totalVolume: 0
+                });
+                
+                // Initialize volume tracking for SOL mint
+                mintVolumes.set(solMint, {
+                  totalVolume: 0,
+                  txCount: 0
+                });
+              }
             } else {
-              const link = links.get(linkKey);
-              link.value++;
-              link.amount += receiverGain;
-              link.usdValue += transferUsdValue;
-              link.count += 1;
+              // WALLET VIEW
+              // Add receiver node
+              if (!nodes.has(receiverAddress)) {
+                nodes.set(receiverAddress, {
+                  id: receiverAddress,
+                  group: 2,
+                  type: 'user',
+                  volume: 0,
+                  label: '',
+                  verified: false,
+                  inVolume: 0,
+                  outVolume: 0,
+                  netVolume: 0,
+                  totalVolume: 0,
+                  txCount: 0
+                });
+                
+                // Initialize volume tracking for this address
+                addressVolumes.set(receiverAddress, {
+                  inVolume: 0,
+                  outVolume: 0,
+                  totalVolume: 0,
+                  txCount: 0
+                });
+              }
+              
+              // Update volume metrics
+              const receiverVolume = addressVolumes.get(receiverAddress);
+              receiverVolume.inVolume += transferUsdValue;
+              receiverVolume.totalVolume += transferUsdValue;
+              receiverVolume.txCount += 1;
+              
+              const centralVolume = addressVolumes.get(centralAddress);
+              centralVolume.outVolume += transferUsdValue;
+              centralVolume.totalVolume += transferUsdValue;
+              centralVolume.txCount += 1;
+              
+              nodes.get(receiverAddress).volume++;
+              nodes.get(centralAddress).volume++;
+              
+              // Create link from primary to receiver
+              const linkKey = `${centralAddress}-${receiverAddress}-SOL`;
+              if (!links.has(linkKey)) {
+                links.set(linkKey, {
+                  source: centralAddress,
+                  target: receiverAddress,
+                  value: 1,
+                  type: 'transfer',
+                  tokenMint: 'SOL',
+                  tokenSymbol: 'SOL',
+                  amount: receiverGain,
+                  usdValue: transferUsdValue,
+                  count: 1 // Initialize count
+                });
+              } else {
+                const link = links.get(linkKey);
+                link.value++;
+                link.amount += receiverGain;
+                link.usdValue += transferUsdValue;
+                link.count += 1;
+              }
             }
           }
         }
-        
       }
       // If a non-primary account lost SOL and primary wallet gained SOL
       else if (!isPrimaryAccount && adjustedDiff < 0) {
@@ -514,65 +651,107 @@ export const processTransactionData = async (
               const transferAmount = Math.min(Math.abs(adjustedDiff), receiverGain);
               const transferUsdValue = transferAmount * solPrice;
               
-              // Add sender node
-              if (!nodes.has(address)) {
-                nodes.set(address, {
-                  id: address,
-                  group: 2,
-                  type: 'user',
-                  volume: 0,
-                  label: '',
-                  verified: false,
-                  inVolume: 0,
-                  outVolume: 0,
-                  netVolume: 0,
-                  totalVolume: 0,
-                  txCount: 0
-                });
+              if (viewMode === 'token') {
+                // TOKEN VIEW: For SOL, use SOL mint node
+                const solMint = 'So11111111111111111111111111111111111111112';
+                processTokenTransferThroughMint(
+                  address,
+                  centralAddress,
+                  solMint,
+                  'SOL',
+                  transferAmount,
+                  transferUsdValue,
+                  nodes,
+                  links,
+                  addressVolumes,
+                  mintVolumes
+                );
                 
-                // Initialize volume tracking for this address
-                addressVolumes.set(address, {
-                  inVolume: 0,
-                  outVolume: 0,
-                  totalVolume: 0,
-                  txCount: 0
-                });
-              }
-              
-              // Update volume metrics
-              const senderVolume = addressVolumes.get(address);
-              senderVolume.outVolume += transferUsdValue;
-              senderVolume.totalVolume += transferUsdValue;
-              senderVolume.txCount += 1;
-              
-              const centralVolume = addressVolumes.get(centralAddress);
-              centralVolume.inVolume += transferUsdValue;
-              centralVolume.totalVolume += transferUsdValue;
-              centralVolume.txCount += 1;
-              
-              nodes.get(address).volume++;
-              nodes.get(centralAddress).volume++;
-              
-              // Create link from sender to primary
-              const linkKey = `${address}-${centralAddress}-SOL`;
-              if (!links.has(linkKey)) {
-                links.set(linkKey, {
-                  source: address,
-                  target: centralAddress,
-                  value: 1,
-                  type: 'transfer',
-                  tokenMint: 'SOL',
-                  tokenSymbol: 'SOL',
-                  amount: transferAmount,
-                  usdValue: transferUsdValue,
-                  count: 1 // Initialize count
-                });
+                // Ensure SOL mint node exists
+                if (!nodes.has(solMint)) {
+                  nodes.set(solMint, {
+                    id: solMint,
+                    group: 2,
+                    tokenType: 'mint',
+                    tokenMint: solMint,
+                    tokenSymbol: 'SOL',
+                    volume: 5,
+                    label: 'SOL',
+                    verified: true,
+                    inVolume: 0,
+                    outVolume: 0,
+                    netVolume: 0,
+                    totalVolume: 0
+                  });
+                  
+                  // Initialize volume tracking for SOL mint
+                  mintVolumes.set(solMint, {
+                    totalVolume: 0,
+                    txCount: 0
+                  });
+                }
               } else {
-                const link = links.get(linkKey);
-                link.value++;
-                link.amount += transferAmount;
-                link.usdValue += transferUsdValue;
-                link.count += 1;
+                // WALLET VIEW
+                // Add sender node
+                if (!nodes.has(address)) {
+                  nodes.set(address, {
+                    id: address,
+                    group: 2,
+                    type: 'user',
+                    volume: 0,
+                    label: '',
+                    verified: false,
+                    inVolume: 0,
+                    outVolume: 0,
+                    netVolume: 0,
+                    totalVolume: 0,
+                    txCount: 0
+                  });
+                  
+                  // Initialize volume tracking for this address
+                  addressVolumes.set(address, {
+                    inVolume: 0,
+                    outVolume: 0,
+                    totalVolume: 0,
+                    txCount: 0
+                  });
+                }
+                
+                // Update volume metrics
+                const senderVolume = addressVolumes.get(address);
+                senderVolume.outVolume += transferUsdValue;
+                senderVolume.totalVolume += transferUsdValue;
+                senderVolume.txCount += 1;
+                
+                const centralVolume = addressVolumes.get(centralAddress);
+                centralVolume.inVolume += transferUsdValue;
+                centralVolume.totalVolume += transferUsdValue;
+                centralVolume.txCount += 1;
+                
+                nodes.get(address).volume++;
+                nodes.get(centralAddress).volume++;
+                
+                // Create link from sender to primary
+                const linkKey = `${address}-${centralAddress}-SOL`;
+                if (!links.has(linkKey)) {
+                  links.set(linkKey, {
+                    source: address,
+                    target: centralAddress,
+                    value: 1,
+                    type: 'transfer',
+                    tokenMint: 'SOL',
+                    tokenSymbol: 'SOL',
+                    amount: transferAmount,
+                    usdValue: transferUsdValue,
+                    count: 1 // Initialize count
+                  });
+                } else {
+                  const link = links.get(linkKey);
+                  link.value++;
+                  link.amount += transferAmount;
+                  link.usdValue += transferUsdValue;
+                  link.count += 1;
+                }
               }
               
               break; // Found primary wallet receiving SOL
@@ -595,6 +774,15 @@ export const processTransactionData = async (
     }
   }
 
+  // Update token mint volumes
+  for (const [mint, volumeData] of mintVolumes.entries()) {
+    if (nodes.has(mint)) {
+      const node = nodes.get(mint);
+      node.totalVolume = volumeData.totalVolume;
+      node.txCount = volumeData.txCount;
+    }
+  }
+
   // Check for known entities and enrich node data
   for (const [address, node] of nodes.entries()) {
     // Check if this address is a known entity
@@ -611,12 +799,21 @@ export const processTransactionData = async (
 
   // Enhance nodes with visual information
   const enhancedNodes = Array.from(nodes.values()).map(node => {
+    // Base volume calculation
+    let volume = Math.max(1, Math.min(10, node.volume || 1));
+    
+    // Special handling for token view mode
+    if (viewMode === 'token' && node.tokenType === 'mint') {
+      // Make mint nodes larger in token view
+      volume = Math.max(8, volume);
+    } else if (node.id === centralAddress) {
+      // Make central node larger
+      volume = Math.max(5, volume);
+    }
+    
     return {
       ...node,
-      // Scale node size based on volume
-      volume: Math.max(1, Math.min(10, node.volume)),
-      // For central node, use larger volume
-      ...(node.id === centralAddress ? { volume: Math.max(5, node.volume) } : {})
+      volume
     };
   });
 
@@ -632,7 +829,8 @@ export const processTransactionData = async (
   // Generate statistics
   const stats = {
     totalTransactions: validTransactions.length,
-    uniqueAddresses: nodes.size,
+    uniqueAddresses: viewMode === 'wallet' ? nodes.size : 
+      new Set([...nodes.values()].filter(n => !n.tokenType || n.tokenType === 'wallet').map(n => n.id)).size,
     totalInteractions: links.size,
     timespan: {
       start: validTransactions[validTransactions.length - 1]?.blockTime || null,
@@ -640,14 +838,197 @@ export const processTransactionData = async (
     }
   };
 
+  // Prepare token data for the token view
+  const tokenData = {
+    tokenMints: Array.from(tokenMints),
+    tokenSymbols: Object.fromEntries(mintToSymbol.entries()),
+    ataToOwner: Object.fromEntries(tokenAccountOwners.entries()),
+    ataToMint: Object.fromEntries(tokenAccountMints.entries())
+  };
+
   return {
     graphData: {
       nodes: enhancedNodes,
       links: enhancedLinks
     },
+    tokenData,
     stats
   };
 };
+
+// Helper function for processing token transfers through mint nodes
+function processTokenTransferThroughMint(
+  senderAddress,
+  receiverAddress,
+  tokenMint,
+  tokenSymbol,
+  transferAmount,
+  transferUsdValue,
+  nodes,
+  links,
+  addressVolumes,
+  mintVolumes
+) {
+  // Ensure sender node exists
+  if (!nodes.has(senderAddress)) {
+    nodes.set(senderAddress, {
+      id: senderAddress,
+      group: 2,
+      type: 'user',
+      tokenType: 'wallet',
+      volume: 0,
+      label: '',
+      verified: false,
+      inVolume: 0,
+      outVolume: 0,
+      netVolume: 0,
+      totalVolume: 0,
+      txCount: 0
+    });
+    
+    // Initialize volume tracking for this address
+    addressVolumes.set(senderAddress, {
+      inVolume: 0,
+      outVolume: 0,
+      totalVolume: 0,
+      txCount: 0
+    });
+  }
+  
+  // Ensure receiver node exists
+  if (!nodes.has(receiverAddress)) {
+    nodes.set(receiverAddress, {
+      id: receiverAddress,
+      group: 2,
+      type: 'user',
+      tokenType: 'wallet',
+      volume: 0,
+      label: '',
+      verified: false,
+      inVolume: 0,
+      outVolume: 0,
+      netVolume: 0,
+      totalVolume: 0,
+      txCount: 0
+    });
+    
+    // Initialize volume tracking for this address
+    addressVolumes.set(receiverAddress, {
+      inVolume: 0,
+      outVolume: 0,
+      totalVolume: 0,
+      txCount: 0
+    });
+  }
+  
+  // Update volume metrics for sender and receiver
+  const senderVolume = addressVolumes.get(senderAddress);
+  senderVolume.outVolume += transferUsdValue;
+  senderVolume.totalVolume += transferUsdValue;
+  senderVolume.txCount += 1;
+  
+  const receiverVolume = addressVolumes.get(receiverAddress);
+  receiverVolume.inVolume += transferUsdValue;
+  receiverVolume.totalVolume += transferUsdValue;
+  receiverVolume.txCount += 1;
+  
+  // Update mint volume
+  if (mintVolumes.has(tokenMint)) {
+    const mintVolume = mintVolumes.get(tokenMint);
+    mintVolume.totalVolume += transferUsdValue;
+    mintVolume.txCount += 1;
+  }
+  
+  // Increase node volumes
+  nodes.get(senderAddress).volume = (nodes.get(senderAddress).volume || 0) + 1;
+  nodes.get(receiverAddress).volume = (nodes.get(receiverAddress).volume || 0) + 1;
+  
+  // 1. Create link from sender to token mint
+  const linkFromSender = `${senderAddress}-${tokenMint}-${tokenSymbol}`;
+  if (!links.has(linkFromSender)) {
+    links.set(linkFromSender, {
+      source: senderAddress,
+      target: tokenMint,
+      value: 1,
+      type: 'token',
+      tokenMint: tokenMint,
+      tokenSymbol: tokenSymbol,
+      amount: transferAmount,
+      usdValue: transferUsdValue,
+      count: 1
+    });
+  } else {
+    const link = links.get(linkFromSender);
+    link.value++;
+    link.amount += transferAmount;
+    link.usdValue += transferUsdValue;
+    link.count += 1;
+  }
+  
+  // 2. Create link from token mint to receiver
+  const linkToReceiver = `${tokenMint}-${receiverAddress}-${tokenSymbol}`;
+  if (!links.has(linkToReceiver)) {
+    links.set(linkToReceiver, {
+      source: tokenMint,
+      target: receiverAddress,
+      value: 1,
+      type: 'token',
+      tokenMint: tokenMint,
+      tokenSymbol: tokenSymbol,
+      amount: transferAmount,
+      usdValue: transferUsdValue,
+      count: 1
+    });
+  } else {
+    const link = links.get(linkToReceiver);
+    link.value++;
+    link.amount += transferAmount;
+    link.usdValue += transferUsdValue;
+    link.count += 1;
+  }
+}
+
+// Token price mapping and helper functions (unchanged)
+// const TOKEN_PRICES = {
+//   'SOL': 120.00, // Example price in USD
+//   // Add other token prices as needed
+// };
+
+// // Get token price by mint or symbol
+// const getTokenPrice = (mint: string, symbol: string) => {
+//   // First try to get by symbol
+//   if (symbol && TOKEN_PRICES[symbol]) {
+//     return TOKEN_PRICES[symbol];
+//   }
+  
+//   // Hardcoded prices for common tokens by mint
+//   const MINT_TO_PRICE = {
+//     'So11111111111111111111111111111111111111112': 120.00, // SOL
+//     '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs': 1.00,  // USDC on Solana
+//     'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So': 125.00, // mSOL
+//   };
+  
+//   if (mint && MINT_TO_PRICE[mint]) {
+//     return MINT_TO_PRICE[mint];
+//   }
+  
+//   // Default price fallback
+//   return 1.00; // Default to 1 USD if token price is unknown
+// };
+
+// Map entity types to node types
+// function mapEntityTypeToNodeType(entityType: string): string {
+//   const typeMap = {
+//     'exchange': 'cex',
+//     'nft_marketplace': 'dex',
+//     'defi_protocol': 'dex',
+//     'token': 'contract',
+//     'project': 'contract',
+//     'foundation': 'cex'
+//   };
+  
+//   return typeMap[entityType] || 'user';
+// }
 
 // Helper function to detect if a program is a DEX
 function isDexProgram(programId: string): boolean {

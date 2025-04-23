@@ -355,6 +355,154 @@
 //   )
 // }
 
+
+// --------------------------------------------------
+
+// "use client"
+
+// import { useState } from 'react';
+// import { DashboardLayout } from '@/components/layouts/DashboardLayout';
+// import WalletAnalyzer from '@/components/WalletAnalyzer';
+// import { Button } from '@/components/ui/button';
+// import { Input } from '@/components/ui/input';
+// import { useToast } from '@/components/ui/use-toast';
+// import { formatAddress, formatAmount } from '@/lib/utils';
+// import { 
+//   Network,
+//   Clock, 
+//   DollarSign,
+//   Building,
+//   Wallet as WalletIcon,
+//   ArrowLeftRight
+// } from 'lucide-react';
+
+// export default function WalletAnalysisPage() {
+//   const [walletAddress, setWalletAddress] = useState('');
+//   const [analysisData, setAnalysisData] = useState(null);
+//   const [isValidAddress, setIsValidAddress] = useState(false);
+//   const { toast } = useToast();
+
+//   const handleAddressInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+//     const address = e.target.value;
+//     setWalletAddress(address);
+//     try {
+//       // Basic Solana address validation
+//       setIsValidAddress(address.length === 44 || address.length === 32);
+//     } catch {
+//       setIsValidAddress(false);
+//     }
+//   };
+
+//   const handleAnalysisComplete = (data: any) => {
+//     setAnalysisData(data);
+    
+//     // Show success toast with summary
+//     toast({
+//       title: "Analysis Complete",
+//       description: `Found ${data.stats.uniqueAddresses} connected addresses with ${data.stats.totalTransactions} transactions`
+//     });
+//   };
+
+//   return (
+//     <DashboardLayout>
+//       <div className="h-full flex flex-col">
+//         {/* Header Section */}
+//         <div className="border-b border-border p-4">
+//           <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+//             <div className="space-y-1">
+//               <h1 className="text-2xl font-bold">Wallet Analysis</h1>
+//               <p className="text-sm text-muted-foreground">
+//                 Analyze wallet interactions and identify connected entities
+//               </p>
+//             </div>
+//           </div>
+          
+//           <div className="mt-4 flex gap-2">
+//             <Input
+//               placeholder="Enter Solana wallet address"
+//               value={walletAddress}
+//               onChange={handleAddressInput}
+//               className={`flex-1 ${
+//                 walletAddress && !isValidAddress ? 'border-red-500' : ''
+//               }`}
+//             />
+//           </div>
+//         </div>
+
+//         {/* Stats Cards */}
+//         {analysisData && (
+//           <div className="p-4 border-b border-border">
+//             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+//               <StatCard
+//                 title="Network Activity"
+//                 value={analysisData.stats.totalTransactions}
+//                 label="transactions"
+//                 icon={<Network className="text-solana-purple" />}
+//               />
+//               <StatCard
+//                 title="Connected Addresses"
+//                 value={analysisData.stats.uniqueAddresses}
+//                 label="unique addresses"
+//                 icon={<WalletIcon className="text-solana-blue" />}
+//               />
+//               <StatCard
+//                 title="Known Entities"
+//                 value={analysisData.graphData.nodes.filter(n => n.verified).length}
+//                 label="verified entities"
+//                 icon={<Building className="text-solana-green" />}
+//               />
+//               <StatCard
+//                 title="Active Since"
+//                 value={new Date(analysisData.stats.timespan.start * 1000)
+//                   .toLocaleDateString()}
+//                 label="first transaction"
+//                 icon={<Clock className="text-accent" />}
+//               />
+//             </div>
+//           </div>
+//         )}
+
+//         {/* Main Content */}
+//         <div className="flex-1 p-4">
+//           {isValidAddress ? (
+//             <div className="h-full border border-border rounded-lg overflow-hidden">
+//               <WalletAnalyzer 
+//                 address={walletAddress}
+//                 onDataProcessed={handleAnalysisComplete}
+//               />
+//             </div>
+//           ) : (
+//             <div className="h-full flex items-center justify-center border border-border rounded-lg">
+//               <div className="text-center text-muted-foreground">
+//                 <Network className="h-12 w-12 mx-auto mb-4" />
+//                 <p>Enter a valid Solana wallet address to start analysis</p>
+//               </div>
+//             </div>
+//           )}
+//         </div>
+//       </div>
+//     </DashboardLayout>
+//   );
+// }
+
+// const StatCard = ({ title, value, label, icon }) => (
+//   <div className="bg-card rounded-md p-4 border border-border">
+//     <div className="flex justify-between">
+//       <h3 className="text-sm font-medium text-muted-foreground">{title}</h3>
+//       <div className="h-4 w-4">
+//         {icon}
+//       </div>
+//     </div>
+//     <div className="mt-2 flex items-baseline">
+//       <span className="text-2xl font-bold">{value}</span>
+//       <span className="ml-1 text-sm text-muted-foreground">{label}</span>
+//     </div>
+//   </div>
+// );
+
+
+// -------------------------------------------------------------------------
+
 "use client"
 
 import { useState } from 'react';
@@ -363,20 +511,23 @@ import WalletAnalyzer from '@/components/WalletAnalyzer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/ui/use-toast';
-import { formatAddress, formatAmount } from '@/lib/utils';
+import { formatAddress } from '@/lib/utils';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { 
   Network,
   Clock, 
   DollarSign,
   Building,
   Wallet as WalletIcon,
-  ArrowLeftRight
+  ArrowLeftRight,
+  Coins
 } from 'lucide-react';
 
 export default function WalletAnalysisPage() {
   const [walletAddress, setWalletAddress] = useState('');
   const [analysisData, setAnalysisData] = useState(null);
   const [isValidAddress, setIsValidAddress] = useState(false);
+  const [viewMode, setViewMode] = useState('wallet'); // 'wallet' or 'token'
   const { toast } = useToast();
 
   const handleAddressInput = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -398,6 +549,10 @@ export default function WalletAnalysisPage() {
       title: "Analysis Complete",
       description: `Found ${data.stats.uniqueAddresses} connected addresses with ${data.stats.totalTransactions} transactions`
     });
+  };
+
+  const handleViewModeChange = (value: string) => {
+    setViewMode(value);
   };
 
   return (
@@ -459,12 +614,35 @@ export default function WalletAnalysisPage() {
           </div>
         )}
 
+        {/* View Mode Selector */}
+        {isValidAddress && (
+          <div className="px-4 pt-4">
+            <Tabs 
+              value={viewMode} 
+              onValueChange={handleViewModeChange}
+              className="w-full mb-4"
+            >
+              <TabsList>
+                <TabsTrigger value="wallet">
+                  <WalletIcon className="h-4 w-4 mr-2" />
+                  Wallet View
+                </TabsTrigger>
+                <TabsTrigger value="token">
+                  <Coins className="h-4 w-4 mr-2" />
+                  Token View
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+        )}
+
         {/* Main Content */}
-        <div className="flex-1 p-4">
+        <div className="flex-1 px-4 pb-4">
           {isValidAddress ? (
             <div className="h-full border border-border rounded-lg overflow-hidden">
               <WalletAnalyzer 
                 address={walletAddress}
+                viewMode={viewMode}
                 onDataProcessed={handleAnalysisComplete}
               />
             </div>

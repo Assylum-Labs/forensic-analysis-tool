@@ -1,4 +1,3 @@
-// src/components/ForceDirectedGraph.tsx
 "use client"
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -8,7 +7,9 @@ interface Node {
   id: string;
   group: number;
   type?: 'cex' | 'dex' | 'user' | 'contract' | 'unknown';
-  confidence?: number;
+  tokenType?: 'wallet' | 'mint';
+  tokenMint?: string;
+  tokenSymbol?: string;
   volume?: number;
   label?: string;
   verified?: boolean;
@@ -17,16 +18,13 @@ interface Node {
   netVolume?: number;
   totalVolume?: number;
   txCount?: number;
-  entityType?: string;
-  description?: string;
-  website?: string;
 }
 
 interface Link {
   source: string | Node;
   target: string | Node;
   value: number;
-  type?: 'deposit' | 'withdrawal' | 'swap' | 'transfer';
+  type?: 'deposit' | 'withdrawal' | 'swap' | 'transfer' | 'token';
   tokenMint?: string;
   tokenSymbol?: string;
   amount?: number;
@@ -39,13 +37,6 @@ interface GraphData {
   links: Link[];
 }
 
-interface ForceDirectedGraphProps {
-  className?: string;
-  graphData: GraphData;
-  onNodeClick?: (node: Node) => void;
-  highlightedNode?: string | null;
-}
-
 interface TooltipState {
   visible: boolean;
   content: string;
@@ -53,9 +44,20 @@ interface TooltipState {
   y: number;
 }
 
+interface ForceDirectedGraphProps {
+  className?: string;
+  graphData: GraphData;
+  viewMode?: 'wallet' | 'token';
+  tokenData?: any;
+  onNodeClick?: (node: Node) => void;
+  highlightedNode?: string | null;
+}
+
 const ForceDirectedGraph = ({ 
   className = "",
   graphData,
+  viewMode = 'wallet',
+  tokenData,
   onNodeClick,
   highlightedNode
 }: ForceDirectedGraphProps) => {
@@ -84,6 +86,14 @@ const ForceDirectedGraph = ({
     }).format(amount);
   };
 
+  // Format token amount
+  const formatTokenAmount = (amount: number, symbol: string): string => {
+    if (amount === undefined || amount === null) return '0';
+    return new Intl.NumberFormat('en-US', {
+      maximumFractionDigits: 6
+    }).format(amount) + ' ' + symbol;
+  };
+
   useEffect(() => {
     if (!svgRef.current || !graphData || !graphData.nodes || !graphData.links) return;
 
@@ -109,13 +119,13 @@ const ForceDirectedGraph = ({
 
     svg.call(zoom as any);
 
-    // Define arrow markers with different colors
+    // Define arrow markers
     svg.append("defs").selectAll("marker")
-      .data(['deposit', 'withdrawal', 'swap', 'transfer'])
+      .data(['token', 'transfer', 'deposit', 'withdrawal', 'swap'])
       .join("marker")
       .attr("id", d => `arrow-${d}`)
       .attr("viewBox", "0 -5 10 10")
-      .attr("refX", 20) // Increased for longer links
+      .attr("refX", 20)
       .attr("refY", 0)
       .attr("markerWidth", 6)
       .attr("markerHeight", 6)
@@ -123,6 +133,7 @@ const ForceDirectedGraph = ({
       .append("path")
       .attr("fill", d => {
         switch(d) {
+          case 'token': return '#FFD700'; // Gold color for token flows
           case 'deposit': return '#14F195'; // Green
           case 'withdrawal': return '#9945FF'; // Purple
           case 'swap': return '#00C2FF'; // Blue
@@ -147,16 +158,31 @@ const ForceDirectedGraph = ({
 
     // Node color based on type
     const getNodeColor = (node: Node) => {
-      if (!node.type || node.type === 'unknown') return '#ffffff';
-      
-      const baseColors = {
-        cex: '#9945FF', // Purple for exchanges
-        dex: '#14F195', // Green for DEX
-        contract: '#00C2FF', // Blue for contracts
-        user: '#EF4444'  // Red for users
-      };
-
-      return baseColors[node.type] || '#ffffff';
+      if (viewMode === 'token') {
+        // Token view colors
+        if (node.tokenType === 'mint') return '#FFD700'; // Gold for token mints
+        
+        if (!node.type || node.type === 'unknown') return '#ffffff'; // White for unknown
+        
+        const baseColors = {
+          cex: '#9945FF', // Purple for exchanges
+          dex: '#14F195', // Green for DEX
+          contract: '#00C2FF', // Blue for contracts
+          user: '#EF4444'  // Red for users
+        };
+        return baseColors[node.type] || '#ffffff';
+      } else {
+        // Wallet view colors
+        if (!node.type || node.type === 'unknown') return '#ffffff';
+        
+        const baseColors = {
+          cex: '#9945FF', // Purple for exchanges
+          dex: '#14F195', // Green for DEX
+          contract: '#00C2FF', // Blue for contracts
+          user: '#EF4444'  // Red for users
+        };
+        return baseColors[node.type] || '#ffffff';
+      }
     };
 
     // Create links with curved paths
@@ -164,6 +190,10 @@ const ForceDirectedGraph = ({
       .data(processedLinks)
       .join("path")
       .attr("stroke", d => {
+        if (viewMode === 'token' && d.type === 'token') {
+          return '#FFD700'; // Gold color for token flows
+        }
+        
         switch(d.type) {
           case 'deposit': return '#14F195'; // Green
           case 'withdrawal': return '#9945FF'; // Purple
@@ -196,14 +226,21 @@ const ForceDirectedGraph = ({
     // Node circles
     node.append("circle")
       .attr("r", d => {
-        // Base size on volume or importance
+        if (viewMode === 'token' && d.tokenType === 'mint') {
+          return 12; // Larger size for token mints in token view
+        }
         if (d.volume) {
-          return Math.max(4, Math.min(12, d.volume * 1.5));
+          return Math.max(5, Math.min(10, d.volume * 1.2));
         }
         return d.group === 1 ? 10 : 6; // Central node is bigger
       })
       .attr("fill", getNodeColor)
-      .attr("stroke", "#ffffff")
+      .attr("stroke", d => {
+        if (viewMode === 'token' && d.tokenType === 'mint') {
+          return '#FFF5CC'; // Light gold outline for token mints
+        }
+        return "#ffffff";
+      })
       .attr("stroke-width", d => 
         highlightedNode === d.id ? 2 : 1
       )
@@ -214,12 +251,22 @@ const ForceDirectedGraph = ({
       );
 
     // Add a subtle glow effect to important nodes
-    node.filter(d => d.verified || d.group === 1)
+    node.filter(d => {
+      if (viewMode === 'token') {
+        return d.tokenType === 'mint' || d.verified || d.group === 1;
+      }
+      return d.verified || d.group === 1;
+    })
       .insert("circle", "circle")
       .attr("r", d => {
-        const baseSize = d.volume ? 
-          Math.max(4, Math.min(12, d.volume * 1.5)) : 
-          (d.group === 1 ? 10 : 6);
+        let baseSize;
+        if (viewMode === 'token' && d.tokenType === 'mint') {
+          baseSize = 12;
+        } else if (d.volume) {
+          baseSize = Math.max(5, Math.min(10, d.volume * 1.2));
+        } else {
+          baseSize = d.group === 1 ? 10 : 6;
+        }
         return baseSize + 3;
       })
       .attr("fill", "none")
@@ -227,19 +274,35 @@ const ForceDirectedGraph = ({
       .attr("stroke-width", 1)
       .attr("stroke-opacity", 0.3);
 
-    // Add labels only for important nodes
+    // Add labels to all nodes in token view, or to important nodes in wallet view
     node
-      .filter(d => d.label || d.group === 1 || d.verified)
+      .filter(d => {
+        if (viewMode === 'token') {
+          return true; // Label all nodes in token view
+        }
+        return d.label || d.group === 1 || d.verified;
+      })
       .append("text")
       .attr("dx", d => {
-        const radius = d.volume ? 
-          Math.max(4, Math.min(12, d.volume * 1.5)) : 
-          (d.group === 1 ? 10 : 6);
+        let radius;
+        if (viewMode === 'token' && d.tokenType === 'mint') {
+          radius = 12;
+        } else if (d.volume) {
+          radius = Math.max(5, Math.min(10, d.volume * 1.2));
+        } else {
+          radius = d.group === 1 ? 10 : 6;
+        }
         return radius + 4;
       })
       .attr("dy", ".35em")
-      .text(d => d.label || formatAddress(d.id))
-      .attr("font-size", "10px")
+      .text(d => {
+        if (viewMode === 'token' && d.tokenType === 'mint') {
+          return d.tokenSymbol || d.label || formatAddress(d.id);
+        }
+        return d.label || formatAddress(d.id);
+      })
+      .attr("font-size", d => viewMode === 'token' && d.tokenType === 'mint' ? "12px" : "10px")
+      .attr("font-weight", d => viewMode === 'token' && d.tokenType === 'mint' ? "bold" : "normal")
       .attr("fill", "#ffffff")
       .style("pointer-events", "none")
       .style("text-shadow", "1px 1px 1px rgba(0,0,0,0.5)");
@@ -247,46 +310,81 @@ const ForceDirectedGraph = ({
     // Node hover handling for tooltip
     node
       .on("mouseover", (event, d) => {
-        let headerType = 'WALLET';
-        if (d.type === 'dex') headerType = 'DAPP';
-        else if (d.type === 'cex') headerType = 'EXCHANGE';
-        else if (d.type === 'contract') headerType = 'CONTRACT';
-        
-        // Format different tooltips based on node type and available data
         let htmlContent = '';
         
-        if (d.label) {
-          // Entity tooltip with name and volume info
-          htmlContent = `
-            <div class="font-bold text-sm">${headerType}</div>
-            <div class="mt-1">
-              <div class="font-medium">Name: ${d.label}</div>
-              ${d.entityType ? `<div class="text-xs text-muted-foreground">Type: ${d.entityType.toUpperCase()}</div>` : ''}
-              ${d.verified ? '<div class="text-xs text-solana-green">✓ Verified Entity</div>' : ''}
-            </div>
-            <div class="mt-2">
-              <div class="text-sm">In Vol: ${formatCurrency(d.inVolume || 0)}</div>
-              <div class="text-sm">Out Vol: ${formatCurrency(d.outVolume || 0)}</div>
-              <div class="text-sm">Net Vol: ${formatCurrency(d.netVolume || 0)}</div>
-              <div class="text-sm">Total Vol: ${formatCurrency(d.totalVolume || 0)}</div>
-            </div>
-            <div class="text-xs mt-2 text-muted-foreground">${formatAddress(d.id, 12)}</div>
-          `;
+        if (viewMode === 'token') {
+          if (d.tokenType === 'mint') {
+            // Token mint tooltip
+            htmlContent = `
+              <div class="font-bold text-sm">TOKEN</div>
+              <div class="mt-1">
+                <div class="font-medium">${d.tokenSymbol || d.label || formatAddress(d.id)}</div>
+                ${d.verified ? '<div class="text-xs text-solana-green">✓ Verified Token</div>' : ''}
+              </div>
+              <div class="mt-2">
+                <div class="text-sm">Total Volume: ${formatCurrency(d.totalVolume || 0)}</div>
+                <div class="text-sm">Transactions: ${d.txCount || 0}</div>
+              </div>
+              <div class="text-xs mt-2 text-muted-foreground">${formatAddress(d.id, 12)}</div>
+            `;
+          } else {
+            // Wallet tooltip in token view
+            htmlContent = `
+              <div class="font-bold text-sm">WALLET</div>
+              <div class="mt-1">
+                ${d.label ? `<div class="font-medium">Name: ${d.label}</div>` : `<div class="font-medium">Address: ${formatAddress(d.id, 8)}</div>`}
+                ${d.entityType ? `<div class="text-xs text-muted-foreground">Type: ${d.entityType.toUpperCase()}</div>` : ''}
+                ${d.verified ? '<div class="text-xs text-solana-green">✓ Verified Entity</div>' : ''}
+              </div>
+              <div class="mt-2">
+                <div class="text-sm">In: ${formatCurrency(d.inVolume || 0)}</div>
+                <div class="text-sm">Out: ${formatCurrency(d.outVolume || 0)}</div>
+                <div class="text-sm">Net: ${formatCurrency(d.netVolume || 0)}</div>
+                <div class="text-sm">Total: ${formatCurrency(d.totalVolume || 0)}</div>
+              </div>
+              <div class="text-xs mt-2 text-muted-foreground">${formatAddress(d.id, 12)}</div>
+            `;
+          }
         } else {
-          // Regular wallet tooltip
-          htmlContent = `
-            <div class="font-bold text-sm">${headerType}</div>
-            <div class="mt-1">
-              <div class="font-medium">Address: ${formatAddress(d.id, 8)}</div>
-              ${d.type ? `<div class="text-xs text-muted-foreground">Type: ${d.type.toUpperCase()}</div>` : ''}
-            </div>
-            <div class="mt-2">
-              <div class="text-sm">In Vol: ${formatCurrency(d.inVolume || 0)}</div>
-              <div class="text-sm">Out Vol: ${formatCurrency(d.outVolume || 0)}</div>
-              <div class="text-sm">Net Vol: ${formatCurrency(d.netVolume || 0)}</div>
-              <div class="text-sm">Total Vol: ${formatCurrency(d.totalVolume || 0)}</div>
-            </div>
-          `;
+          // Standard wallet view tooltip
+          let headerType = 'WALLET';
+          if (d.type === 'dex') headerType = 'DAPP';
+          else if (d.type === 'cex') headerType = 'EXCHANGE';
+          else if (d.type === 'contract') headerType = 'CONTRACT';
+          
+          if (d.label) {
+            // Entity tooltip with name and volume info
+            htmlContent = `
+              <div class="font-bold text-sm">${headerType}</div>
+              <div class="mt-1">
+                <div class="font-medium">Name: ${d.label}</div>
+                ${d.entityType ? `<div class="text-xs text-muted-foreground">Type: ${d.entityType.toUpperCase()}</div>` : ''}
+                ${d.verified ? '<div class="text-xs text-solana-green">✓ Verified Entity</div>' : ''}
+              </div>
+              <div class="mt-2">
+                <div class="text-sm">In Vol: ${formatCurrency(d.inVolume || 0)}</div>
+                <div class="text-sm">Out Vol: ${formatCurrency(d.outVolume || 0)}</div>
+                <div class="text-sm">Net Vol: ${formatCurrency(d.netVolume || 0)}</div>
+                <div class="text-sm">Total Vol: ${formatCurrency(d.totalVolume || 0)}</div>
+              </div>
+              <div class="text-xs mt-2 text-muted-foreground">${formatAddress(d.id, 12)}</div>
+            `;
+          } else {
+            // Regular wallet tooltip
+            htmlContent = `
+              <div class="font-bold text-sm">${headerType}</div>
+              <div class="mt-1">
+                <div class="font-medium">Address: ${formatAddress(d.id, 8)}</div>
+                ${d.type ? `<div class="text-xs text-muted-foreground">Type: ${d.type.toUpperCase()}</div>` : ''}
+              </div>
+              <div class="mt-2">
+                <div class="text-sm">In Vol: ${formatCurrency(d.inVolume || 0)}</div>
+                <div class="text-sm">Out Vol: ${formatCurrency(d.outVolume || 0)}</div>
+                <div class="text-sm">Net Vol: ${formatCurrency(d.netVolume || 0)}</div>
+                <div class="text-sm">Total Vol: ${formatCurrency(d.totalVolume || 0)}</div>
+              </div>
+            `;
+          }
         }
         
         setTooltip({
@@ -316,16 +414,26 @@ const ForceDirectedGraph = ({
         const sourceNode = nodeMap.get(source);
         const targetNode = nodeMap.get(target);
         
-        const sourceName = sourceNode?.label || formatAddress(source, 6);
-        const targetName = targetNode?.label || formatAddress(target, 6);
+        let sourceName = sourceNode?.label || formatAddress(source, 6);
+        let targetName = targetNode?.label || formatAddress(target, 6);
+
+        // In token view, use token symbols for token mint nodes
+        if (viewMode === 'token') {
+          if (sourceNode?.tokenType === 'mint') {
+            sourceName = sourceNode.tokenSymbol || sourceName;
+          }
+          if (targetNode?.tokenType === 'mint') {
+            targetName = targetNode.tokenSymbol || targetName;
+          }
+        }
         
-        const transactionType = d.type || 'transfer';
+        const transactionType = d.type === 'token' ? 'TOKEN TRANSFER' : 'TRANSFER';
         const transactionValue = d.usdValue ? formatCurrency(d.usdValue) : '$0';
         const transactionCount = d.count || 1;
         
-        // Transaction tooltip showing transfer details
+        // Transaction tooltip
         const htmlContent = `
-          <div class="font-bold text-sm">TRANSFER</div>
+          <div class="font-bold text-sm">${transactionType}</div>
           <div class="mt-2">
             <div class="text-sm">Volume: ${transactionValue}</div>
             <div class="text-sm">Count: ${transactionCount}</div>
@@ -340,7 +448,7 @@ const ForceDirectedGraph = ({
               <div class="text-xs font-medium">${d.tokenSymbol}</div>
               ${d.amount ? `
                 <div class="text-xs text-muted-foreground">Amount:</div>
-                <div class="text-xs font-medium">${d.amount.toFixed(6)} ${d.tokenSymbol}</div>
+                <div class="text-xs font-medium">${formatTokenAmount(d.amount, d.tokenSymbol)}</div>
               ` : ''}
             ` : ''}
           </div>
@@ -392,17 +500,68 @@ const ForceDirectedGraph = ({
       }
     });
 
-    // Create force simulation
+    // Create force simulation with different parameters based on view mode
     const simulation = d3.forceSimulation(graphData.nodes)
       .force("link", d3.forceLink(processedLinks)
         .id(d => (d as any).id)
-        .distance(200)) // Increased from 80 to 200 (2.5x)
-      .force("charge", d3.forceManyBody().strength(-200)) // Increased strength to balance longer links
+        .distance(d => {
+          // In token view, make links to/from token mints shorter
+          if (viewMode === 'token') {
+            const source = typeof (d as any).source === 'string' ? (d as any).source : (d as any).source.id;
+            const target = typeof (d as any).target === 'string' ? (d as any).target : (d as any).target.id;
+            
+            const sourceNode = nodeMap.get(source);
+            const targetNode = nodeMap.get(target);
+            
+            if (sourceNode?.tokenType === 'mint' || targetNode?.tokenType === 'mint') {
+              return 120; // Shorter distance for token mint connections
+            }
+          }
+          return 180; // Default distance
+        }))
+      .force("charge", d3.forceManyBody().strength(d => {
+        // In token view, make token mints more strongly repulsive
+        if (viewMode === 'token' && (d as any).tokenType === 'mint') {
+          return -300;
+        }
+        return -150;
+      }))
       .force("center", d3.forceCenter(width / 2, height / 2))
       .force("collision", d3.forceCollide().radius(d => {
+        if (viewMode === 'token' && (d as any).tokenType === 'mint') {
+          return 40; // Larger collision radius for token mints
+        }
         const volume = (d as any).volume || 1;
         return Math.max(15, Math.min(30, volume * 2));
       }));
+
+    // For token view, add additional forces to organize by token type
+    if (viewMode === 'token') {
+      // Position token mints in a circle around the center
+      const numTokenMints = graphData.nodes.filter(n => n.tokenType === 'mint').length;
+      if (numTokenMints > 0) {
+        let mintIndex = 0;
+        const radius = Math.min(width, height) * 0.35; // Circle radius
+        
+        simulation.force("x", d3.forceX().x(d => {
+          if ((d as any).tokenType === 'mint') {
+            // Arrange mints in a circle
+            const angle = (mintIndex++ * 2 * Math.PI / numTokenMints);
+            return width/2 + radius * Math.cos(angle);
+          }
+          return width / 2;
+        }).strength(d => (d as any).tokenType === 'mint' ? 0.5 : 0.1));
+        
+        simulation.force("y", d3.forceY().y(d => {
+          if ((d as any).tokenType === 'mint') {
+            // We already incremented mintIndex above, so use mintIndex-1
+            const angle = ((mintIndex-1) * 2 * Math.PI / numTokenMints);
+            return height/2 + radius * Math.sin(angle);
+          }
+          return height / 2;
+        }).strength(d => (d as any).tokenType === 'mint' ? 0.5 : 0.1));
+      }
+    }
 
     // Update positions on each tick
     simulation.on("tick", () => {
@@ -447,7 +606,7 @@ const ForceDirectedGraph = ({
     return () => {
       simulation.stop();
     };
-  }, [graphData, highlightedNode, onNodeClick]);
+  }, [graphData, highlightedNode, onNodeClick, viewMode]);
 
   return (
     <div className={`w-full h-full bg-solana-dark ${className} relative`}>
