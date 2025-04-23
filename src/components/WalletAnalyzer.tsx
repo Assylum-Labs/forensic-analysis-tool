@@ -46,7 +46,7 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
       // Step 2: Fetch wallet transactions
       const pubkey = new PublicKey(walletAddress);
       const signatures = await connection.getSignaturesForAddress(pubkey, {
-        limit: 25 // Reduced from 100 to get a cleaner visualization
+        limit: 100 // Reduced from 100 to get a cleaner visualization
       });
 
       // Step 3: Get transaction details

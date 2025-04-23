@@ -223,7 +223,7 @@ const ForceDirectedGraph = ({
     // Node hover handling for tooltip
     node
       .on("mouseover", (event, d) => {
-        console.log('event', event);
+        console.log('data', d);
         
         const nodeType = d.type || 'unknown';
         const htmlContent = `
