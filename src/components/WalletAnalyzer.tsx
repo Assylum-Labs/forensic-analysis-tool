@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey, Transaction, TransactionResponse } from '@solana/web3.js';
 import { useToast } from '@/components/ui/use-toast';
 import ForceDirectedGraph from '@/components/ForceDirectedGraph';
 import { fetchEntityData, processTransactionData } from '@/lib/api';
@@ -39,30 +39,87 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
     }
   }, [address]);
 
+  async function fetchTransactionsWithinDateRange(
+    pubkey: PublicKey,
+    startDate: Date,
+    endDate?: Date
+  ): Promise<TransactionResponse[]> {
+    const allValidSignatures: string[] = [];
+    let before: string | undefined = undefined;
+  
+    const startEpoch = Math.floor(startDate.getTime() / 1000);
+    const endEpoch = endDate ? Math.floor(endDate.getTime() / 1000) : undefined;
+  
+    while (true) {
+      const signatures: ConfirmedSignatureInfo[] = await connection.getSignaturesForAddress(pubkey, {
+        limit: 1000,
+        before,
+      });
+  
+      if (signatures.length === 0) break;
+  
+      for (const sig of signatures) {
+        const blockTime = sig.blockTime;
+  
+        if (!blockTime) continue;
+  
+        // Stop if we are past the start date
+        if (blockTime < startEpoch) {
+          return await batchFetchTransactions(allValidSignatures);
+        }
+  
+        // Filter by time range
+        if ((!endEpoch || blockTime <= endEpoch) && blockTime >= startEpoch) {
+          allValidSignatures.push(sig.signature);
+        }
+      }
+  
+      before = signatures[signatures.length - 1].signature;
+  
+      // await new Promise((res) => setTimeout(res, 300));
+    }
+  
+    return await batchFetchTransactions(allValidSignatures);
+  }
+  
+  async function batchFetchTransactions(signatures: string[]): Promise<TransactionResponse[]> {
+    const batchSize = 50;
+    const transactions: TransactionResponse[] = [];
+  
+    for (let i = 0; i < signatures.length; i += batchSize) {
+      const batch = signatures.slice(i, i + batchSize);
+      const txs = await connection.getTransactions(batch, {
+        maxSupportedTransactionVersion: 0,
+      });
+  
+      transactions.push(...(txs.filter(Boolean) as TransactionResponse[]));
+      // await new Promise((res) => setTimeout(res, 300));
+    }
+  
+    return transactions;
+  }
+  
+
   const analyzeWallet = async (walletAddress: string) => {
     setIsLoading(true);
     try {
-      // Step 1: Load known entities if not loaded
-      // if (entities.length === 0) {
-      //   const entityData = await fetchEntityData();
-        
-      //   if (entityData && entityData.entities) {
-      //     setEntities((entityData.entities.map(e => [e.address, e])));
-      //   }
-      // }
-
       // Step 2: Fetch wallet transactions
       const pubkey = new PublicKey(walletAddress);
-      const signatures = await connection.getSignaturesForAddress(pubkey, {
-        limit: 100 // Limited for cleaner visualization
-      });
+      
+
+      // Get today's date
+      const now = new Date();
+
+      // Start of 1 month ago (same day, previous month)
+      const start = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+
+      // End is today
+      const end = now;
+
 
       // Step 3: Get transaction details
-      const transactions = await Promise.all(
-        signatures.map(sig => connection.getTransaction(sig.signature, {
-          maxSupportedTransactionVersion: 0
-        }))
-      );
+      const transactions = await fetchTransactionsWithinDateRange(pubkey, start, end)
+
 
       // Step 4: Process transactions and build graph (wallet view)
       const processedData = await processTransactionData(
