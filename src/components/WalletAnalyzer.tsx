@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Connection, PublicKey, Transaction, TransactionResponse } from '@solana/web3.js';
+import { Connection, PublicKey, TransactionResponse } from '@solana/web3.js';
 import { useToast } from '@/components/ui/use-toast';
 import ForceDirectedGraph from '@/components/ForceDirectedGraph';
 import { fetchEntityData, processTransactionData } from '@/lib/api';
@@ -11,22 +11,39 @@ import { entities } from '@/lib/data';
 interface WalletAnalyzerProps {
   address: string;
   viewMode?: 'wallet' | 'token';
+  startDate?: Date;
+  endDate?: Date;
+  forceRefresh?: boolean;
   onDataProcessed?: (data: any) => void;
+  isLoading?: boolean;
+  setIsLoading?: (loading: boolean) => void;
 }
 
 export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({ 
   address,
   viewMode = 'wallet',
-  onDataProcessed 
+  startDate: propStartDate,
+  endDate: propEndDate,
+  forceRefresh = false,
+  onDataProcessed,
+  isLoading: controlledIsLoading,
+  setIsLoading: setControlledIsLoading
 }) => {
   const [walletGraphData, setWalletGraphData] = useState(null);
   const [tokenGraphData, setTokenGraphData] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
-  // const [entities, setEntities] = useState<Entity[]>([]);
-  // const [entities, setEntities] = useState<Map<string, any>>(new Map());
+  const [internalIsLoading, setInternalIsLoading] = useState(false);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [tokenData, setTokenData] = useState<any>(null);
+  const [lastAnalyzedParams, setLastAnalyzedParams] = useState({
+    address: '',
+    startDate: null as Date | null,
+    endDate: null as Date | null
+  });
   const { toast } = useToast();
+
+  // Use controlled or internal loading state
+  const isLoading = controlledIsLoading !== undefined ? controlledIsLoading : internalIsLoading;
+  const setIsLoading = setControlledIsLoading || setInternalIsLoading;
 
   // Initialize Solana connection
   const connection = new Connection(
@@ -34,10 +51,33 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
   );
 
   useEffect(() => {
-    if (address) {
-      analyzeWallet(address);
+    // Set default dates if not provided
+    const now = new Date();
+    const defaultStartDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+    
+    const startDate = propStartDate || defaultStartDate;
+    const endDate = propEndDate || now;
+    
+    const shouldRefresh = 
+      address && 
+      (forceRefresh || 
+       address !== lastAnalyzedParams.address ||
+       !areDatesEqual(startDate, lastAnalyzedParams.startDate) ||
+       !areDatesEqual(endDate, lastAnalyzedParams.endDate));
+    
+    if (shouldRefresh) {
+      analyzeWallet(address, startDate, endDate);
     }
-  }, [address]);
+  }, [address, propStartDate, propEndDate, forceRefresh]);
+
+  // Helper to compare dates (only comparing year, month, day)
+  const areDatesEqual = (date1: Date | null, date2: Date | null): boolean => {
+    if (!date1 || !date2) return false;
+    
+    return date1.getFullYear() === date2.getFullYear() &&
+           date1.getMonth() === date2.getMonth() &&
+           date1.getDate() === date2.getDate();
+  };
 
   async function fetchTransactionsWithinDateRange(
     pubkey: PublicKey,
@@ -51,7 +91,7 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
     const endEpoch = endDate ? Math.floor(endDate.getTime() / 1000) : undefined;
   
     while (true) {
-      const signatures: ConfirmedSignatureInfo[] = await connection.getSignaturesForAddress(pubkey, {
+      const signatures = await connection.getSignaturesForAddress(pubkey, {
         limit: 1000,
         before,
       });
@@ -74,12 +114,20 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
         }
       }
   
-      before = signatures[signatures.length - 1].signature;
+      // If we have processed enough signatures, stop to avoid rate limits
+      if (allValidSignatures.length > 500) {
+        toast({
+          title: "Large Dataset",
+          description: "Analyzing the first 500 transactions for performance reasons",
+          duration: 5000
+        });
+        break;
+      }
   
-      // await new Promise((res) => setTimeout(res, 300));
+      before = signatures[signatures.length - 1].signature;
     }
   
-    return await batchFetchTransactions(allValidSignatures);
+    return await batchFetchTransactions(allValidSignatures.slice(0, 500));
   }
   
   async function batchFetchTransactions(signatures: string[]): Promise<TransactionResponse[]> {
@@ -93,33 +141,49 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
       });
   
       transactions.push(...(txs.filter(Boolean) as TransactionResponse[]));
-      // await new Promise((res) => setTimeout(res, 300));
     }
   
     return transactions;
   }
   
 
-  const analyzeWallet = async (walletAddress: string) => {
+  const analyzeWallet = async (
+    walletAddress: string, 
+    startDate: Date, 
+    endDate: Date
+  ) => {
     setIsLoading(true);
     try {
+      // Save the current analysis parameters
+      setLastAnalyzedParams({
+        address: walletAddress,
+        startDate,
+        endDate
+      });
+
       // Step 2: Fetch wallet transactions
       const pubkey = new PublicKey(walletAddress);
       
-
-      // Get today's date
-      const now = new Date();
-
-      // Start of 1 month ago (same day, previous month)
-      const start = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
-
-      // End is today
-      const end = now;
-
+      // Show toast notification about the date range
+      toast({
+        title: "Analyzing Transactions",
+        description: `Fetching transactions from ${startDate.toLocaleDateString()} to ${endDate.toLocaleDateString()}`,
+        duration: 3000
+      });
 
       // Step 3: Get transaction details
-      const transactions = await fetchTransactionsWithinDateRange(pubkey, start, end)
+      const transactions = await fetchTransactionsWithinDateRange(pubkey, startDate, endDate);
 
+      // If no transactions found, show notification
+      if (transactions.length === 0) {
+        toast({
+          title: "No Transactions Found",
+          description: `No transactions found in the selected date range for this wallet`,
+          variant: "destructive"
+        });
+        setIsLoading(false);
+        return;
+      }
 
       // Step 4: Process transactions and build graph (wallet view)
       const processedData = await processTransactionData(
@@ -153,7 +217,6 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
         description: error.message || "Failed to analyze wallet",
         variant: "destructive"
       });
-    } finally {
       setIsLoading(false);
     }
   };
@@ -187,7 +250,7 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
   const currentGraphData = viewMode === 'wallet' ? walletGraphData : tokenGraphData;
 
   return (
-    <div className="h-full">
+    <div className="h-full flex flex-col">
       {isLoading ? (
         <div className="h-full flex items-center justify-center">
           <div className="text-center">
@@ -196,16 +259,19 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
           </div>
         </div>
       ) : currentGraphData ? (
-        <ForceDirectedGraph 
-          graphData={currentGraphData}
-          onNodeClick={handleNodeClick}
-          highlightedNode={selectedNode}
-          viewMode={viewMode}
-          tokenData={tokenData}
-        />
+        <div className="flex-1 h-[calc(100vh-380px)]"> {/* Increased height of the graph */}
+          <ForceDirectedGraph 
+            graphData={currentGraphData}
+            onNodeClick={handleNodeClick}
+            highlightedNode={selectedNode}
+            viewMode={viewMode}
+            tokenData={tokenData}
+            className="h-full w-full"
+          />
+        </div>
       ) : (
         <div className="h-full flex items-center justify-center">
-          <p className="text-muted-foreground">No data to display. Enter a valid Solana wallet address.</p>
+          <p className="text-muted-foreground">No data to display. Enter a valid Solana wallet address and select a date range.</p>
         </div>
       )}
     </div>

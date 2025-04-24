@@ -103,7 +103,7 @@ const ForceDirectedGraph = ({
     d3.select(svgRef.current).selectAll("*").remove();
 
     const width = svgRef.current.clientWidth || 800;
-    const height = svgRef.current.clientHeight || 1000;
+    const height = 600;
 
     // Create SVG
     const svg = d3.select(svgRef.current)
