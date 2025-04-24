@@ -5,6 +5,8 @@ import ForceDirectedGraph from '@/components/ForceDirectedGraph';
 import { fetchEntityData, processTransactionData } from '@/lib/api';
 import { formatAddress } from '@/lib/utils';
 import { Loader2 } from 'lucide-react';
+import { Entity } from '@/types';
+import { entities } from '@/lib/data';
 
 interface WalletAnalyzerProps {
   address: string;
@@ -20,7 +22,8 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
   const [walletGraphData, setWalletGraphData] = useState(null);
   const [tokenGraphData, setTokenGraphData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [entities, setEntities] = useState<Map<string, any>>(new Map());
+  // const [entities, setEntities] = useState<Entity[]>([]);
+  // const [entities, setEntities] = useState<Map<string, any>>(new Map());
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [tokenData, setTokenData] = useState<any>(null);
   const { toast } = useToast();
@@ -40,13 +43,13 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
     setIsLoading(true);
     try {
       // Step 1: Load known entities if not loaded
-      if (entities.size === 0) {
-        const entityData = await fetchEntityData();
+      // if (entities.length === 0) {
+      //   const entityData = await fetchEntityData();
         
-        if (entityData && entityData.entities) {
-          setEntities(new Map(entityData.entities.map(e => [e.address, e])));
-        }
-      }
+      //   if (entityData && entityData.entities) {
+      //     setEntities((entityData.entities.map(e => [e.address, e])));
+      //   }
+      // }
 
       // Step 2: Fetch wallet transactions
       const pubkey = new PublicKey(walletAddress);

@@ -51,6 +51,7 @@ interface ForceDirectedGraphProps {
   tokenData?: any;
   onNodeClick?: (node: Node) => void;
   highlightedNode?: string | null;
+  curvature?: number; // Added parameter to control link curvature
 }
 
 const ForceDirectedGraph = ({ 
@@ -59,7 +60,8 @@ const ForceDirectedGraph = ({
   viewMode = 'wallet',
   tokenData,
   onNodeClick,
-  highlightedNode
+  highlightedNode,
+  curvature = 1 // Default curvature value increased to 5
 }: ForceDirectedGraphProps) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const [tooltip, setTooltip] = useState<TooltipState>({
@@ -69,7 +71,7 @@ const ForceDirectedGraph = ({
     y: 0
   });
 
-  // Format address for labels
+  // Format address for tooltips
   const formatAddress = (address: string, length = 4) => {
     if (!address) return '';
     return `${address.slice(0, length)}...${address.slice(-length)}`;
@@ -101,7 +103,7 @@ const ForceDirectedGraph = ({
     d3.select(svgRef.current).selectAll("*").remove();
 
     const width = svgRef.current.clientWidth || 800;
-    const height = svgRef.current.clientHeight || 600;
+    const height = svgRef.current.clientHeight || 1000;
 
     // Create SVG
     const svg = d3.select(svgRef.current)
@@ -119,11 +121,12 @@ const ForceDirectedGraph = ({
 
     svg.call(zoom as any);
 
-    // Define arrow markers
-    svg.append("defs").selectAll("marker")
-      .data(['token', 'transfer', 'deposit', 'withdrawal', 'swap'])
-      .join("marker")
-      .attr("id", d => `arrow-${d}`)
+    // Define defs for markers and animations
+    const defs = svg.append("defs");
+    
+    // Arrow marker definition
+    defs.append("marker")
+      .attr("id", "arrow-default")
       .attr("viewBox", "0 -5 10 10")
       .attr("refX", 20)
       .attr("refY", 0)
@@ -131,19 +134,15 @@ const ForceDirectedGraph = ({
       .attr("markerHeight", 6)
       .attr("orient", "auto")
       .append("path")
-      .attr("fill", d => {
-        switch(d) {
-          case 'token': return '#FFD700'; // Gold color for token flows
-          case 'deposit': return '#14F195'; // Green
-          case 'withdrawal': return '#9945FF'; // Purple
-          case 'swap': return '#00C2FF'; // Blue
-          default: return '#666666'; // Gray
-        }
-      })
+      .attr("fill", "#666666") // Light gray color
       .attr("d", "M0,-5L10,0L0,5");
-
-    // Create the path group
-    const linkGroup = g.append("g").attr("class", "links");
+      
+    // Triangle for animation
+    defs.append("path")
+      .attr("id", "triangle-marker")
+      .attr("d", "M0,-4L6,0L0,4Z")
+      .attr("fill", "#FFFFFF") // White triangle for visibility
+      .attr("opacity", "0.8");
 
     // Process the data to ensure proper references
     const nodeMap = new Map(graphData.nodes.map(node => [node.id, node]));
@@ -156,11 +155,16 @@ const ForceDirectedGraph = ({
       nodeMap.has(link.target as string)
     );
 
+    // Create the path group
+    const linkGroup = g.append("g").attr("class", "links");
+
     // Node color based on type
     const getNodeColor = (node: Node) => {
       if (viewMode === 'token') {
         // Token view colors
-        if (node.tokenType === 'mint') return '#FFD700'; // Gold for token mints
+        if (node.tokenType === 'mint') {
+          return '#FFD700'; // Gold color for token mints
+        }
         
         if (!node.type || node.type === 'unknown') return '#ffffff'; // White for unknown
         
@@ -185,29 +189,49 @@ const ForceDirectedGraph = ({
       }
     };
 
-    // Create links with curved paths
+    // Create links with more pronounced curved paths
     const link = linkGroup.selectAll("path")
       .data(processedLinks)
       .join("path")
-      .attr("stroke", d => {
-        if (viewMode === 'token' && d.type === 'token') {
-          return '#FFD700'; // Gold color for token flows
-        }
-        
-        switch(d.type) {
-          case 'deposit': return '#14F195'; // Green
-          case 'withdrawal': return '#9945FF'; // Purple
-          case 'swap': return '#00C2FF'; // Blue
-          default: return '#666666'; // Gray
-        }
-      })
+      .attr("id", (d, i) => `link-path-${i}`) // Add ID for animation
+      .attr("stroke", "#666666") // Fixed light gray color for all links
       .attr("stroke-opacity", d => {
         if (!highlightedNode) return 0.6;
         return (d.source === highlightedNode || d.target === highlightedNode) ? 0.8 : 0.1;
       })
       .attr("stroke-width", d => Math.sqrt(d.value || 1) * 1.5)
       .attr("fill", "none")
-      .attr("marker-end", d => `url(#arrow-${d.type || 'transfer'})`);
+      .attr("marker-end", "url(#arrow-default)");
+
+    // Add animated triangles along the paths
+    const animations = linkGroup.selectAll(".triangle-animation")
+      .data(processedLinks)
+      .join("g")
+      .attr("class", "triangle-animation");
+      
+    animations.each(function(d, i) {
+      const animationGroup = d3.select(this);
+      
+      // Add multiple triangles with different offsets for each path
+      for (let offset = 0; offset < 1; offset += 0.25) {
+        animationGroup.append("use")
+          .attr("href", "#triangle-marker")
+          .attr("opacity", 0.7)
+          .append("animateMotion")
+          .attr("begin", `${offset}s`) // Offset start time
+          .attr("dur", "3s") // Duration
+          .attr("repeatCount", "indefinite") // Repeat forever
+          .attr("path", function() {
+            // Get the path element
+            const pathElement = document.getElementById(`link-path-${i}`);
+            if (pathElement) {
+              return pathElement.getAttribute("d") || "";
+            }
+            return "";
+          })
+          .attr("rotate", "auto"); // Auto-rotate triangle to follow path
+      }
+    });
 
     // Create nodes group
     const nodeGroup = g.append("g").attr("class", "nodes");
@@ -235,12 +259,7 @@ const ForceDirectedGraph = ({
         return d.group === 1 ? 10 : 6; // Central node is bigger
       })
       .attr("fill", getNodeColor)
-      .attr("stroke", d => {
-        if (viewMode === 'token' && d.tokenType === 'mint') {
-          return '#FFF5CC'; // Light gold outline for token mints
-        }
-        return "#ffffff";
-      })
+      .attr("stroke", "#ffffff")
       .attr("stroke-width", d => 
         highlightedNode === d.id ? 2 : 1
       )
@@ -274,38 +293,7 @@ const ForceDirectedGraph = ({
       .attr("stroke-width", 1)
       .attr("stroke-opacity", 0.3);
 
-    // Add labels to all nodes in token view, or to important nodes in wallet view
-    node
-      .filter(d => {
-        if (viewMode === 'token') {
-          return true; // Label all nodes in token view
-        }
-        return d.label || d.group === 1 || d.verified;
-      })
-      .append("text")
-      .attr("dx", d => {
-        let radius;
-        if (viewMode === 'token' && d.tokenType === 'mint') {
-          radius = 12;
-        } else if (d.volume) {
-          radius = Math.max(5, Math.min(10, d.volume * 1.2));
-        } else {
-          radius = d.group === 1 ? 10 : 6;
-        }
-        return radius + 4;
-      })
-      .attr("dy", ".35em")
-      .text(d => {
-        if (viewMode === 'token' && d.tokenType === 'mint') {
-          return d.tokenSymbol || d.label || formatAddress(d.id);
-        }
-        return d.label || formatAddress(d.id);
-      })
-      .attr("font-size", d => viewMode === 'token' && d.tokenType === 'mint' ? "12px" : "10px")
-      .attr("font-weight", d => viewMode === 'token' && d.tokenType === 'mint' ? "bold" : "normal")
-      .attr("fill", "#ffffff")
-      .style("pointer-events", "none")
-      .style("text-shadow", "1px 1px 1px rgba(0,0,0,0.5)");
+    // No text labels as per requirements
 
     // Node hover handling for tooltip
     node
@@ -500,39 +488,18 @@ const ForceDirectedGraph = ({
       }
     });
 
-    // Create force simulation with different parameters based on view mode
+    // Create force simulation with parameters for flower-like opening
     const simulation = d3.forceSimulation(graphData.nodes)
       .force("link", d3.forceLink(processedLinks)
         .id(d => (d as any).id)
-        .distance(d => {
-          // In token view, make links to/from token mints shorter
-          if (viewMode === 'token') {
-            const source = typeof (d as any).source === 'string' ? (d as any).source : (d as any).source.id;
-            const target = typeof (d as any).target === 'string' ? (d as any).target : (d as any).target.id;
-            
-            const sourceNode = nodeMap.get(source);
-            const targetNode = nodeMap.get(target);
-            
-            if (sourceNode?.tokenType === 'mint' || targetNode?.tokenType === 'mint') {
-              return 120; // Shorter distance for token mint connections
-            }
-          }
-          return 180; // Default distance
-        }))
-      .force("charge", d3.forceManyBody().strength(d => {
-        // In token view, make token mints more strongly repulsive
-        if (viewMode === 'token' && (d as any).tokenType === 'mint') {
-          return -300;
-        }
-        return -150;
-      }))
+        .distance(300)) // Significantly longer link distance
+      .force("charge", d3.forceManyBody().strength(-400)) // Stronger repulsion
       .force("center", d3.forceCenter(width / 2, height / 2))
       .force("collision", d3.forceCollide().radius(d => {
         if (viewMode === 'token' && (d as any).tokenType === 'mint') {
-          return 40; // Larger collision radius for token mints
+          return 50; // Larger collision radius for token mints
         }
-        const volume = (d as any).volume || 1;
-        return Math.max(15, Math.min(30, volume * 2));
+        return 30; // Larger collision radius for all nodes
       }));
 
     // For token view, add additional forces to organize by token type
@@ -541,7 +508,7 @@ const ForceDirectedGraph = ({
       const numTokenMints = graphData.nodes.filter(n => n.tokenType === 'mint').length;
       if (numTokenMints > 0) {
         let mintIndex = 0;
-        const radius = Math.min(width, height) * 0.35; // Circle radius
+        const radius = Math.min(width, height) * 0.3; // Circle radius
         
         simulation.force("x", d3.forceX().x(d => {
           if ((d as any).tokenType === 'mint') {
@@ -550,7 +517,7 @@ const ForceDirectedGraph = ({
             return width/2 + radius * Math.cos(angle);
           }
           return width / 2;
-        }).strength(d => (d as any).tokenType === 'mint' ? 0.5 : 0.1));
+        }).strength(d => (d as any).tokenType === 'mint' ? 0.8 : 0.03));
         
         simulation.force("y", d3.forceY().y(d => {
           if ((d as any).tokenType === 'mint') {
@@ -559,30 +526,38 @@ const ForceDirectedGraph = ({
             return height/2 + radius * Math.sin(angle);
           }
           return height / 2;
-        }).strength(d => (d as any).tokenType === 'mint' ? 0.5 : 0.1));
+        }).strength(d => (d as any).tokenType === 'mint' ? 0.8 : 0.03));
       }
     }
 
     // Update positions on each tick
     simulation.on("tick", () => {
-      // Update link paths - use curved paths for better visualization
+      // Update link paths - use more pronounced curved paths for flower-like effect
       link.attr("d", d => {
         const sourceX = (d.source as any).x;
         const sourceY = (d.source as any).y;
         const targetX = (d.target as any).x;
         const targetY = (d.target as any).y;
         
-        // Calculate the midpoint with a curve factor
+        // Calculate distance between nodes
         const dx = targetX - sourceX;
         const dy = targetY - sourceY;
-        const dr = Math.sqrt(dx * dx + dy * dy) * 2;
+        const distance = Math.sqrt(dx * dx + dy * dy);
         
-        // Create a curved path
-        return `M${sourceX},${sourceY}A${dr},${dr} 0 0,1 ${targetX},${targetY}`;
+        // Create a curved path with exaggerated curvature based on curvature parameter
+        return `M${sourceX},${sourceY}A${distance * curvature},${distance * curvature} 0 0,1 ${targetX},${targetY}`;
       });
 
       // Update node positions
       node.attr("transform", d => `translate(${(d as any).x},${(d as any).y})`);
+      
+      // Update triangle animations to match updated paths
+      animations.each(function(d, i) {
+        const animationGroup = d3.select(this);
+        const updatedPath = document.getElementById(`link-path-${i}`)?.getAttribute("d") || "";
+        
+        animationGroup.selectAll("animateMotion").attr("path", updatedPath);
+      });
     });
 
     // Dragging functions
@@ -606,7 +581,7 @@ const ForceDirectedGraph = ({
     return () => {
       simulation.stop();
     };
-  }, [graphData, highlightedNode, onNodeClick, viewMode]);
+  }, [graphData, highlightedNode, onNodeClick, viewMode, curvature]);
 
   return (
     <div className={`w-full h-full bg-solana-dark ${className} relative`}>

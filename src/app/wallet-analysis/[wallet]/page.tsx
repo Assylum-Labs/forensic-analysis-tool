@@ -505,7 +505,7 @@
 
 "use client"
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { DashboardLayout } from '@/components/layouts/DashboardLayout';
 import WalletAnalyzer from '@/components/WalletAnalyzer';
 import { Button } from '@/components/ui/button';
@@ -522,27 +522,46 @@ import {
   ArrowLeftRight,
   Coins
 } from 'lucide-react';
+import { useParams } from 'next/navigation';
 
 export default function WalletAnalysisPage() {
+  const { wallet } = useParams<{wallet: string}>()
   const [walletAddress, setWalletAddress] = useState('');
   const [analysisData, setAnalysisData] = useState(null);
   const [isValidAddress, setIsValidAddress] = useState(false);
   const [viewMode, setViewMode] = useState('wallet'); // 'wallet' or 'token'
   const { toast } = useToast();
 
+  useEffect(() => {
+    console.log(wallet);
+    
+    if(wallet){
+      validateAddress(wallet)
+      setWalletAddress(wallet)
+    }
+  },[wallet])
+
   const handleAddressInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const address = e.target.value;
     setWalletAddress(address);
-    try {
-      // Basic Solana address validation
-      setIsValidAddress(address.length === 44 || address.length === 32);
-    } catch {
-      setIsValidAddress(false);
-    }
+    validateAddress()
   };
+
+  const validateAddress = (address: string) => {
+    if (!address) return setIsValidAddress(false)
+
+    if(address.length === 44 || address.length === 32){
+      setIsValidAddress(true)
+    } else {
+      setIsValidAddress(false)
+    }
+  }
 
   const handleAnalysisComplete = (data: any) => {
     setAnalysisData(data);
+
+    console.log('data', data);
+    
     
     // Show success toast with summary
     toast({

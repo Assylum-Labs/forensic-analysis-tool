@@ -1,3 +1,4 @@
+import { Entity } from "@/types";
 import { Transaction, VersionedTransactionResponse } from "@solana/web3.js";
 
 // Base API configuration
@@ -49,7 +50,8 @@ const getTokenPrice = (mint: string, symbol: string) => {
 export const processTransactionData = async (
   transactions: VersionedTransactionResponse[],
   centralAddress: string,
-  entities: Map<string, any>,
+  entities: Entity[],
+  // entities: Map<string, any>,
   viewMode: 'wallet' | 'token' = 'wallet'
 ) => {
   // Initialize data structures
@@ -782,19 +784,21 @@ export const processTransactionData = async (
       node.txCount = volumeData.txCount;
     }
   }
-
   // Check for known entities and enrich node data
   for (const [address, node] of nodes.entries()) {
     // Check if this address is a known entity
-    if (entities.has(address)) {
-      const entityData = entities.get(address);
-      node.label = entityData.name;
-      node.type = mapEntityTypeToNodeType(entityData.type);
-      node.entityType = entityData.type;
-      node.verified = entityData.verified;
-      node.description = entityData.description;
-      node.website = entityData.website;
-    }
+    entities.forEach((entity: Entity) => {
+      if (entity.address === address) {
+        node.icon = entity.icon
+        node.label = entity.name;
+        node.tokenSymbol = entity.name;
+        node.type = mapEntityTypeToNodeType(entity.type);
+        node.entityType = entity.type;
+        node.verified = entity.verified;
+        node.description = entity.description;
+        node.website = entity.website;
+      }
+    })
   }
 
   // Enhance nodes with visual information
@@ -1066,6 +1070,7 @@ function mapEntityTypeToNodeType(entityType: string): string {
     'defi_protocol': 'dex',
     'token': 'contract',
     'project': 'contract',
+    'DAPP': 'contract',
     'foundation': 'cex'
   };
   
