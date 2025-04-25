@@ -413,8 +413,9 @@ const TransactionFlowGraph = ({
       });
 
     // Link hover handling for tooltip
+    // Link hover handling for tooltip
     link
-      .on("mouseover", (event, d) => {
+        .on("mouseover", (event, d) => {
         const source = typeof d.source === 'string' ? d.source : d.source.id;
         const target = typeof d.target === 'string' ? d.target : d.target.id;
         
@@ -426,42 +427,42 @@ const TransactionFlowGraph = ({
 
         // Highlight this link is part of critical path
         const isCriticalPath = 
-          criticalPathIds.includes(source) && 
-          criticalPathIds.includes(target);
+            criticalPathIds.includes(source) && 
+            criticalPathIds.includes(target);
         
         // Tooltip content
         const htmlContent = `
-          <div class="font-bold text-sm">TRANSFER</div>
-          <div class="mt-2 grid grid-cols-2 gap-x-2">
+            <div class="font-bold text-sm">TRANSFER</div>
+            <div class="mt-2 grid grid-cols-2 gap-x-2">
             <div class="text-xs text-muted-foreground">From:</div>
             <div class="text-xs font-medium">${sourceName}</div>
             <div class="text-xs text-muted-foreground">To:</div>
             <div class="text-xs font-medium">${targetName}</div>
-            ${d.amount ? `
-              <div class="text-xs text-muted-foreground">Amount:</div>
-              <div class="text-xs font-medium">${formatAmount(d.amount, d.tokenSymbol)}</div>
+            ${d.amount !== undefined ? `
+                <div class="text-xs text-muted-foreground">Amount:</div>
+                <div class="text-xs font-medium">${formatAmount(d.amount, d.tokenSymbol)}</div>
             ` : ''}
             ${isCriticalPath ? `
-              <div class="text-xs text-muted-foreground">Path:</div>
-              <div class="text-xs font-medium text-red-500">Critical path</div>
+                <div class="text-xs text-muted-foreground">Path:</div>
+                <div class="text-xs font-medium text-red-500">Critical path</div>
             ` : ''}
-          </div>
+            </div>
         `;
         
         setTooltip({
-          visible: true,
-          content: htmlContent,
-          x: event.layerX,
-          y: event.layerY
+            visible: true,
+            content: htmlContent,
+            x: event.layerX,
+            y: event.layerY
         });
         
         // Highlight the connection
         d3.select(event.currentTarget)
-          .transition()
-          .duration(150)
-          .attr("stroke-width", Math.sqrt(d.value || 1) * 2.5)
-          .attr("stroke-opacity", 1);
-      })
+            .transition()
+            .duration(150)
+            .attr("stroke-width", Math.sqrt(d.value || 1) * 2.5)
+            .attr("stroke-opacity", 1);
+        })
       .on("mousemove", (event) => {
         setTooltip(prev => ({
           ...prev,
@@ -631,22 +632,26 @@ const TransactionFlowGraph = ({
 
 // Helper function to format amounts with token symbol
 function formatAmount(amount: number, symbol?: string): string {
-  if (amount === undefined || amount === null) return '0';
-  
-  // If it's SOL (native token)
-  if (symbol === 'system' || symbol === 'SOL') {
-    const sol = amount / 1e9; // Convert lamports to SOL
-    return `${sol.toLocaleString(undefined, { 
-      minimumFractionDigits: 2, 
-      maximumFractionDigits: 9 
-    })} SOL`;
+    if (amount === undefined || amount === null) return '0';
+    
+    // If it's SOL (native token)
+    if (symbol === 'system' || symbol === 'SOL') {
+      // Check if amount looks like lamports (very large number)
+      // This is a safeguard in case amounts weren't properly converted
+      const sol = amount > 100000 ? amount / 1e9 : amount;
+      return `${sol.toLocaleString(undefined, { 
+        minimumFractionDigits: 2, 
+        maximumFractionDigits: 9 
+      })} SOL`;
+    }
+    
+    // For other tokens/amounts, use appropriate formatting based on size
+    const formattedAmount = amount.toLocaleString(undefined, { 
+      minimumFractionDigits: amount < 0.01 ? 6 : 2, 
+      maximumFractionDigits: amount < 0.01 ? 9 : 6 
+    });
+    
+    return `${formattedAmount} ${symbol || ''}`.trim();
   }
-  
-  // For other tokens/amounts
-  return `${amount.toLocaleString(undefined, { 
-    minimumFractionDigits: 2, 
-    maximumFractionDigits: 6 
-  })} ${symbol || ''}`.trim();
-}
 
 export default TransactionFlowGraph;
