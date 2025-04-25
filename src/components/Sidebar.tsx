@@ -18,7 +18,7 @@ import {
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
-  { name: 'Transaction Flow', href: '/transaction-flow', icon: Network },
+  // { name: 'Transaction Flow', href: '/transaction-flow', icon: Network },
   { name: 'Transaction Analysis', href: '/transaction-analysis', icon: ArrowLeftRight },
   { name: 'Wallet Analysis', href: '/wallet-analysis', icon: Wallet },
   { name: 'Transaction Clustering', href: '/transaction-clustering', icon: BarChart },
