@@ -12,12 +12,14 @@ import {
   Settings,
   Fingerprint,
   LineChart,
-  Home
+  Home,
+  ArrowLeftRight
 } from 'lucide-react'
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
   { name: 'Transaction Flow', href: '/transaction-flow', icon: Network },
+  { name: 'Transaction Analysis', href: '/transaction-analysis', icon: ArrowLeftRight },
   { name: 'Wallet Analysis', href: '/wallet-analysis', icon: Wallet },
   { name: 'Transaction Clustering', href: '/transaction-clustering', icon: BarChart },
   { name: 'Entity Labeling', href: '/entity-labeling', icon: Building },

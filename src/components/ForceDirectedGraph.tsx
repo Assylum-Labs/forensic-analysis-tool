@@ -213,24 +213,24 @@ const ForceDirectedGraph = ({
       const animationGroup = d3.select(this);
       
       // Add multiple triangles with different offsets for each path
-      for (let offset = 0; offset < 1; offset += 0.25) {
-        animationGroup.append("use")
-          .attr("href", "#triangle-marker")
-          .attr("opacity", 0.7)
-          .append("animateMotion")
-          .attr("begin", `${offset}s`) // Offset start time
-          .attr("dur", "3s") // Duration
-          .attr("repeatCount", "indefinite") // Repeat forever
-          .attr("path", function() {
-            // Get the path element
-            const pathElement = document.getElementById(`link-path-${i}`);
-            if (pathElement) {
-              return pathElement.getAttribute("d") || "";
-            }
-            return "";
-          })
-          .attr("rotate", "auto"); // Auto-rotate triangle to follow path
-      }
+      animationGroup.append("use")
+        .attr("href", "#triangle-marker")
+        .attr("opacity", 0.7)
+        .append("animateMotion")
+        // .attr("begin", `${offset}s`) // Offset start time
+        .attr("dur", "4s") // Duration
+        .attr("repeatCount", "indefinite") // Repeat forever
+        .attr("path", function() {
+          // Get the path element
+          const pathElement = document.getElementById(`link-path-${i}`);
+          if (pathElement) {
+            return pathElement.getAttribute("d") || "";
+          }
+          return "";
+        })
+        .attr("rotate", "auto"); // Auto-rotate triangle to follow path
+      // for (let offset = 0; offset < 1; offset += 0.25) {
+      // }
     });
 
     // Create nodes group
