@@ -28,8 +28,8 @@ const navigation = [
 const tools = [
   { name: 'Search', href: '/search', icon: Search },
   { name: 'Trace Explorer', href: '/trace-explorer', icon: LineChart },
-  { name: 'Identity Resolver', href: '/identity-resolver', icon: Fingerprint },
-  { name: 'Settings', href: '/settings', icon: Settings },
+  // { name: 'Identity Resolver', href: '/identity-resolver', icon: Fingerprint },
+  // { name: 'Settings', href: '/settings', icon: Settings },
 ]
 
 export function Sidebar() {
@@ -90,12 +90,12 @@ export function Sidebar() {
                 ))}
               </ul>
             </li>
-            <li className="mt-auto">
+            {/* <li className="mt-auto">
               <div className="group -mx-2 flex gap-x-3 rounded-md p-2 text-sm font-semibold text-muted-foreground hover:bg-muted hover:text-foreground">
                 <Settings className="h-5 w-5 shrink-0" aria-hidden="true" />
                 Settings
               </div>
-            </li>
+            </li> */}
           </ul>
         </nav>
       </div>
