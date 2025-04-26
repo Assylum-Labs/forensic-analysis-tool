@@ -7,6 +7,8 @@ import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { formatAddress } from '@/lib/utils'
+import DatePicker from 'react-datepicker'
+import "react-datepicker/dist/react-datepicker.css"
 import { 
   Download,
   Filter,
@@ -23,7 +25,8 @@ import {
   Clock,
   DollarSign,
   BarChart,
-  X
+  X,
+  Calendar
 } from 'lucide-react'
 import ClusterGraph from '@/components/ClusterGraph'
 import { fetchAndClusterTransactions, getClusteringStats } from '@/lib/clusteringService'
@@ -32,7 +35,13 @@ import { TransactionCluster } from '@/lib/transactionClustering'
 export default function TransactionClusteringPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [timeframe, setTimeframe] = useState<'day' | 'week' | 'month' | 'all'>('week')
+  const [timeframe, setTimeframe] = useState<'day' | 'week' | 'month' | 'all' | 'custom'>('week')
+  const [startDate, setStartDate] = useState(() => {
+    const date = new Date()
+    date.setDate(date.getDate() - 7) // Default to a week ago
+    return date
+  })
+  const [endDate, setEndDate] = useState(new Date())
   const [activeTab, setActiveTab] = useState('clusters')
   const [selectedCluster, setSelectedCluster] = useState<TransactionCluster | null>(null)
   const [clusteringResults, setClusteringResults] = useState<{
@@ -46,7 +55,39 @@ export default function TransactionClusteringPage() {
   } | null>(null)
   const [clusterStats, setClusterStats] = useState<any>(null)
   const [filterType, setFilterType] = useState<string>('')
+  const [showDatePicker, setShowDatePicker] = useState(false)
   const { toast } = useToast()
+
+  // Update start date when timeframe changes
+  useEffect(() => {
+    const now = new Date()
+    
+    if (timeframe === 'custom') {
+      setShowDatePicker(true)
+      return
+    }
+    
+    setShowDatePicker(false)
+    
+    if (timeframe === 'day') {
+      const oneDayAgo = new Date(now)
+      oneDayAgo.setDate(now.getDate() - 1)
+      setStartDate(oneDayAgo)
+    } else if (timeframe === 'week') {
+      const oneWeekAgo = new Date(now)
+      oneWeekAgo.setDate(now.getDate() - 7)
+      setStartDate(oneWeekAgo)
+    } else if (timeframe === 'month') {
+      const oneMonthAgo = new Date(now)
+      oneMonthAgo.setDate(now.getDate() - 30)
+      setStartDate(oneMonthAgo)
+    } else if (timeframe === 'all') {
+      // Set to Solana launch date (approximate)
+      setStartDate(new Date(2020, 2, 16))
+    }
+    
+    setEndDate(now)
+  }, [timeframe])
 
   // Function to run the clustering analysis
   const handleClusterAnalysis = async (e: React.FormEvent) => {
@@ -65,10 +106,13 @@ export default function TransactionClusteringPage() {
     setSelectedCluster(null)
     
     try {
-      // Fetch and analyze clusters
+      // Fetch and analyze clusters with date range
       const results = await fetchAndClusterTransactions(searchQuery, {
         timeframe,
-        filterType: filterType || undefined
+        startDate,
+        endDate,
+        filterType: filterType || undefined,
+        batchSize: timeframe === 'month' || timeframe === 'all' ? 50 : 100 // Smaller batch size for longer periods
       })
       
       // Update state with results
@@ -101,7 +145,7 @@ export default function TransactionClusteringPage() {
   }
 
   // Handle timeframe change
-  const handleTimeframeChange = (value: 'day' | 'week' | 'month' | 'all') => {
+  const handleTimeframeChange = (value: 'day' | 'week' | 'month' | 'all' | 'custom') => {
     setTimeframe(value)
   }
 
@@ -156,24 +200,6 @@ export default function TransactionClusteringPage() {
                 Group related transactions and identify associated wallets
               </p>
             </div>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm">
-                <HelpCircle className="mr-2 h-4 w-4" />
-                Help
-              </Button>
-              <Button variant="outline" size="sm">
-                <Filter className="mr-2 h-4 w-4" />
-                Filters
-              </Button>
-              <Button variant="outline" size="sm">
-                <Upload className="mr-2 h-4 w-4" />
-                Import
-              </Button>
-              <Button variant="outline" size="sm">
-                <Download className="mr-2 h-4 w-4" />
-                Export
-              </Button>
-            </div>
           </div>
           
           <form onSubmit={handleClusterAnalysis} className="mt-4 flex flex-col md:flex-row gap-2">
@@ -205,9 +231,65 @@ export default function TransactionClusteringPage() {
                 <option value="week">Last 7 Days</option>
                 <option value="month">Last 30 Days</option>
                 <option value="all">All Time</option>
+                <option value="custom">Custom Range</option>
               </select>
             </div>
           </form>
+
+          {/* Custom date range picker */}
+          {showDatePicker && (
+            <div className="mt-4 flex flex-col sm:flex-row gap-4 items-end bg-muted/20 p-3 rounded-md border border-border">
+              <div className="flex-1 space-y-1">
+                <label className="text-sm text-muted-foreground">From</label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                    <Calendar className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <DatePicker
+                    selected={startDate}
+                    onChange={(date) => setStartDate(date as Date)}
+                    selectsStart
+                    startDate={startDate}
+                    endDate={endDate}
+                    maxDate={endDate}
+                    className="w-full pl-10 bg-transparent border border-input h-10 rounded-md px-3 py-2"
+                  />
+                </div>
+              </div>
+              <div className="flex-1 space-y-1">
+                <label className="text-sm text-muted-foreground">To</label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                    <Calendar className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <DatePicker
+                    selected={endDate}
+                    onChange={(date) => setEndDate(date as Date)}
+                    selectsEnd
+                    startDate={startDate}
+                    endDate={endDate}
+                    minDate={startDate}
+                    maxDate={new Date()}
+                    className="w-full pl-10 bg-transparent border border-input h-10 rounded-md px-3 py-2"
+                  />
+                </div>
+              </div>
+              <div className="flex-none">
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => {
+                    setTimeframe('week');
+                    setShowDatePicker(false);
+                  }}
+                  className="h-10"
+                >
+                  <X className="h-4 w-4 mr-2" />
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
 
           {/* Show analysis progress when loading */}
           {isLoading && (

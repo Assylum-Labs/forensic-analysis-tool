@@ -3,6 +3,7 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import { clusterTransactions, TransactionCluster, findRelatedWallets, identifyWalletRings } from './transactionClustering';
 import { formatAddress } from './utils';
 import { Entity } from '@/types';
+// import { generateSampleClusters } from './sampleClusterData';
 
 // In-memory cache for clustering results
 const clusteringCache = new Map<string, {
@@ -22,12 +23,18 @@ const clusteringCache = new Map<string, {
 // Cache expiration time (30 minutes)
 const CACHE_EXPIRATION = 30 * 60 * 1000;
 
+// Flag to use sample data for development/demo
+const USE_SAMPLE_DATA = false;
+
 // Function to fetch transactions and perform clustering
 export async function fetchAndClusterTransactions(
   searchQuery: string,
   options: {
-    timeframe?: 'day' | 'week' | 'month' | 'all',
+    timeframe?: 'day' | 'week' | 'month' | 'all' | 'custom',
+    startDate?: Date,
+    endDate?: Date,
     limit?: number,
+    batchSize?: number,
     filterType?: string,
     enrichWithEntities?: boolean,
     entities?: Entity[]
@@ -35,14 +42,49 @@ export async function fetchAndClusterTransactions(
 ) {
   const {
     timeframe = 'week',
+    startDate,
+    endDate = new Date(),
     limit = 500,
+    batchSize = 100,
     filterType,
     enrichWithEntities = true,
     entities = []
   } = options;
 
+  // Calculate actual start date based on timeframe if not explicitly provided
+  let effectiveStartDate = startDate;
+  
+  if (!effectiveStartDate) {
+    const now = new Date();
+    
+    switch (timeframe) {
+      case 'day':
+        effectiveStartDate = new Date(now);
+        effectiveStartDate.setDate(now.getDate() - 1);
+        break;
+      case 'week':
+        effectiveStartDate = new Date(now);
+        effectiveStartDate.setDate(now.getDate() - 7);
+        break;
+      case 'month':
+        effectiveStartDate = new Date(now);
+        effectiveStartDate.setDate(now.getDate() - 30);
+        break;
+      case 'all':
+        effectiveStartDate = new Date(2020, 2, 16); // Approximate Solana launch date
+        break;
+      default:
+        effectiveStartDate = new Date(now);
+        effectiveStartDate.setDate(now.getDate() - 7); // Default to 1 week
+    }
+  }
+  
+  // Format dates for cache key
+  const startDateStr = effectiveStartDate.toISOString().split('T')[0];
+  const endDateStr = endDate.toISOString().split('T')[0];
+
   // Create cache key from query and options
-  const cacheKey = `${searchQuery}-${timeframe}-${limit}-${filterType || 'all'}`;
+  const cacheKey = `${searchQuery}-${startDateStr}-${endDateStr}-${limit}-${filterType || 'all'}`;
   
   // Check if we have cached results that are still valid
   const cachedResult = clusteringCache.get(cacheKey);
@@ -51,7 +93,8 @@ export async function fetchAndClusterTransactions(
   }
 
   try {
-    // Initialize Solana connection
+
+    // Real implementation would use actual blockchain data:
     const connection = new Connection(
       process.env.NEXT_PUBLIC_SOLANA_RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com'
     );
@@ -65,11 +108,18 @@ export async function fetchAndClusterTransactions(
       const publicKey = new PublicKey(searchQuery);
       isWallet = true;
       
-      // Fetch signatures for the wallet
-      const signatures = await fetchSignaturesForTimeframe(connection, publicKey, timeframe, limit);
+      // Fetch signatures for the wallet with date range
+      const signatures = await fetchSignaturesForDateRange(
+        connection, 
+        publicKey, 
+        effectiveStartDate, 
+        endDate, 
+        limit,
+        batchSize
+      );
       
       // Fetch transaction details
-      transactions = await fetchTransactionsFromSignatures(connection, signatures);
+      transactions = await fetchTransactionsFromSignatures(connection, signatures, batchSize);
     } catch (error) {
       // Not a valid address, try as a pattern match
       console.log("Not a valid address, treating as a pattern:", error);
@@ -143,71 +193,102 @@ export async function fetchAndClusterTransactions(
   }
 }
 
-// Helper function to fetch signatures for a given timeframe
-async function fetchSignaturesForTimeframe(
+// Helper function to fetch signatures for a given date range with improved batching
+async function fetchSignaturesForDateRange(
   connection: Connection,
   publicKey: PublicKey,
-  timeframe: 'day' | 'week' | 'month' | 'all',
-  limit: number
+  startDate: Date,
+  endDate: Date,
+  maxSignatures: number = 500,
+  batchSize: number = 100
 ): Promise<string[]> {
-  // Calculate start time based on timeframe
-  const now = new Date();
-  let startTime: Date;
-  
-  switch (timeframe) {
-    case 'day':
-      startTime = new Date(now.getTime() - 24 * 60 * 60 * 1000); // 1 day ago
-      break;
-    case 'week':
-      startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); // 1 week ago
-      break;
-    case 'month':
-      startTime = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); // 30 days ago
-      break;
-    case 'all':
-    default:
-      startTime = new Date(2020, 0, 1); // Beginning of Solana history
-      break;
-  }
-  
   // Convert to Unix timestamp
-  const startTimeUnix = Math.floor(startTime.getTime() / 1000);
+  const startTimeUnix = Math.floor(startDate.getTime() / 1000);
+  const endTimeUnix = Math.floor(endDate.getTime() / 1000);
   
   try {
-    const signatures = [];
+    const signatures: string[] = [];
     let lastSignature: string | undefined = undefined;
+    let hasMore = true;
+    let consecutiveEmptyResponses = 0;
+    const MAX_EMPTY_RESPONSES = 3; // Safety mechanism to avoid infinite loops
+    
+    console.log(`Fetching signatures from ${startDate.toLocaleDateString()} to ${endDate.toLocaleDateString()}`);
     
     // Fetch signatures in batches until we have enough or no more are available
-    while (signatures.length < limit) {
-      const signatureBatch = await connection.getSignaturesForAddress(
-        publicKey,
-        { 
-          before: lastSignature,
-          limit: Math.min(1000, limit - signatures.length)
+    while (signatures.length < maxSignatures && hasMore && consecutiveEmptyResponses < MAX_EMPTY_RESPONSES) {
+      // Calculate optimal batch size based on remaining signatures needed
+      const currentBatchSize = Math.min(batchSize, maxSignatures - signatures.length);
+      
+      try {
+        // Add a small delay between requests to avoid rate limits
+        if (signatures.length > 0) {
+          await new Promise(resolve => setTimeout(resolve, 100));
         }
-      );
-      
-      if (signatureBatch.length === 0) break;
-      
-      // Filter by time and add to results
-      for (const sig of signatureBatch) {
-        if (sig.blockTime && sig.blockTime >= startTimeUnix) {
-          signatures.push(sig.signature);
-        } else if (timeframe !== 'all') {
-          // We've gone past our time window, stop fetching more
-          break;
+        
+        const signatureBatch = await connection.getSignaturesForAddress(
+          publicKey,
+          { 
+            before: lastSignature,
+            limit: currentBatchSize,
+            // Solana API doesn't support filtering by time directly in the request,
+            // so we'll filter the results manually
+          }
+        );
+        
+        if (signatureBatch.length === 0) {
+          consecutiveEmptyResponses++;
+          hasMore = false;
+          continue;
+        } else {
+          consecutiveEmptyResponses = 0;
         }
-      }
-      
-      // Update last signature for pagination
-      lastSignature = signatureBatch[signatureBatch.length - 1].signature;
-      
-      // If we got fewer than requested, we've reached the end
-      if (signatureBatch.length < Math.min(1000, limit - signatures.length)) {
-        break;
+        
+        // Filter by time and add to results
+        let addedAny = false;
+        for (const sig of signatureBatch) {
+          // Update last signature for pagination
+          if (!lastSignature) {
+            lastSignature = sig.signature;
+          }
+          
+          if (sig.blockTime) {
+            // Only include signatures within the date range
+            if (sig.blockTime >= startTimeUnix && sig.blockTime <= endTimeUnix) {
+              signatures.push(sig.signature);
+              addedAny = true;
+            } else if (sig.blockTime < startTimeUnix) {
+              // We've gone past our time window, stop fetching more
+              hasMore = false;
+              break;
+            }
+          }
+        }
+        
+        // If we didn't add any signatures from this batch, we might be approaching
+        // the end of the available signatures
+        if (!addedAny) {
+          consecutiveEmptyResponses++;
+        }
+        
+        // Update last signature for pagination
+        if (signatureBatch.length > 0) {
+          lastSignature = signatureBatch[signatureBatch.length - 1].signature;
+        }
+        
+        // If we got fewer than requested, we've reached the end
+        if (signatureBatch.length < currentBatchSize) {
+          hasMore = false;
+        }
+      } catch (error) {
+        console.error("Error fetching signature batch:", error);
+        // Introduce backoff on error
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        consecutiveEmptyResponses++;
       }
     }
     
+    console.log(`Found ${signatures.length} signatures in the date range`);
     return signatures;
   } catch (error) {
     console.error("Error fetching signatures:", error);
@@ -215,27 +296,40 @@ async function fetchSignaturesForTimeframe(
   }
 }
 
-// Fetch transaction details from signatures
+// Fetch transaction details from signatures with improved batching
 async function fetchTransactionsFromSignatures(
   connection: Connection,
-  signatures: string[]
+  signatures: string[],
+  batchSize: number = 100
 ) {
   if (signatures.length === 0) return [];
   
   try {
     // Fetch transactions in batches to avoid rate limits
-    const batchSize = 100;
     const transactions = [];
     
     for (let i = 0; i < signatures.length; i += batchSize) {
-      const batch = signatures.slice(i, i + batchSize);
-      const txBatch = await connection.getTransactions(batch, {
-        maxSupportedTransactionVersion: 0
-      });
-      
-      transactions.push(...txBatch.filter(Boolean));
+      try {
+        const batch = signatures.slice(i, Math.min(i + batchSize, signatures.length));
+        console.log(`Fetching transactions batch ${i/batchSize + 1}/${Math.ceil(signatures.length/batchSize)}, size: ${batch.length}`);
+        
+        // Add a small delay between batches to avoid rate limits
+        if (i > 0) {
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+        
+        const txBatch = await connection.getTransactions(batch, {
+          maxSupportedTransactionVersion: 0
+        });
+        
+        transactions.push(...txBatch.filter(Boolean));
+      } catch (error) {
+        console.error(`Error fetching transaction batch at offset ${i}:`, error);
+        // Continue with next batch on error
+      }
     }
     
+    console.log(`Successfully fetched ${transactions.length} of ${signatures.length} transactions`);
     return transactions;
   } catch (error) {
     console.error("Error fetching transaction details:", error);

@@ -248,7 +248,6 @@ const ClusterGraph: React.FC<ClusterGraphProps> = ({ cluster, className = "" }) 
 
     const width = svgRef.current.clientWidth || 600;
     const height = 400;
-    // const height = svgRef.current.clientHeight || 400;
 
     // Create SVG
     const svg = d3.select(svgRef.current)
@@ -377,16 +376,16 @@ const ClusterGraph: React.FC<ClusterGraphProps> = ({ cluster, className = "" }) 
       setTooltip({
         visible: true,
         content,
-        x: event.pageX,
-        y: event.pageY
+        x: event.layerX,
+        y: event.layerY
       });
     }
     
     function handleNodeMousemove(event: any) {
       setTooltip(prev => ({
         ...prev,
-        x: event.pageX,
-        y: event.pageY
+        x: event.layerX,
+        y: event.layerY
       }));
     }
     
