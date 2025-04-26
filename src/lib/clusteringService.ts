@@ -3,7 +3,6 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import { clusterTransactions, TransactionCluster, findRelatedWallets, identifyWalletRings } from './transactionClustering';
 import { formatAddress } from './utils';
 import { Entity } from '@/types';
-// import { generateSampleClusters } from './sampleClusterData';
 
 // In-memory cache for clustering results
 const clusteringCache = new Map<string, {
@@ -23,9 +22,6 @@ const clusteringCache = new Map<string, {
 // Cache expiration time (30 minutes)
 const CACHE_EXPIRATION = 30 * 60 * 1000;
 
-// Flag to use sample data for development/demo
-const USE_SAMPLE_DATA = false;
-
 // Function to fetch transactions and perform clustering
 export async function fetchAndClusterTransactions(
   searchQuery: string,
@@ -37,7 +33,8 @@ export async function fetchAndClusterTransactions(
     batchSize?: number,
     filterType?: string,
     enrichWithEntities?: boolean,
-    entities?: Entity[]
+    entities?: Entity[],
+    maxDepth?: number // New parameter for depth control
   } = {}
 ) {
   const {
@@ -48,7 +45,8 @@ export async function fetchAndClusterTransactions(
     batchSize = 100,
     filterType,
     enrichWithEntities = true,
-    entities = []
+    entities = [],
+    maxDepth = Infinity // Default to unlimited depth
   } = options;
 
   // Calculate actual start date based on timeframe if not explicitly provided
@@ -82,9 +80,10 @@ export async function fetchAndClusterTransactions(
   // Format dates for cache key
   const startDateStr = effectiveStartDate.toISOString().split('T')[0];
   const endDateStr = endDate.toISOString().split('T')[0];
+  const depthStr = maxDepth === Infinity ? 'all' : maxDepth.toString();
 
-  // Create cache key from query and options
-  const cacheKey = `${searchQuery}-${startDateStr}-${endDateStr}-${limit}-${filterType || 'all'}`;
+  // Create cache key from query and options including depth
+  const cacheKey = `${searchQuery}-${startDateStr}-${endDateStr}-${limit}-${filterType || 'all'}-${depthStr}`;
   
   // Check if we have cached results that are still valid
   const cachedResult = clusteringCache.get(cacheKey);
@@ -121,7 +120,6 @@ export async function fetchAndClusterTransactions(
       // Fetch transaction details
       transactions = await fetchTransactionsFromSignatures(connection, signatures, batchSize);
     } catch (error) {
-      // Not a valid address, try as a pattern match
       console.log("Not a valid address, treating as a pattern:", error);
       
       // This would be a more complex API query in a real implementation
@@ -148,8 +146,8 @@ export async function fetchAndClusterTransactions(
       return emptyResult;
     }
 
-    // Perform transaction clustering
-    const { clusters, flaggedClusters } = await clusterTransactions(transactions);
+    // Perform transaction clustering with depth limit
+    const { clusters, flaggedClusters } = await clusterTransactions(transactions, maxDepth);
     
     // Apply any type filters
     let filteredClusters = clusters;
@@ -442,3 +440,134 @@ export function getClusteringStats(clusters: TransactionCluster[]) {
     totalAccounts: stats.totalAccounts.size
   };
 }
+
+// Generate sample clusters for demo mode
+// function generateSampleClusters(searchQuery: string, maxDepth: number = Infinity) {
+//   // Use the search query as a seed for pseudo-random generation
+//   const seed = searchQuery.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  
+//   // Create a simple random function with the seed
+//   const random = () => {
+//     const x = Math.sin(seed++) * 10000;
+//     return x - Math.floor(x);
+//   };
+  
+//   // Generate accounts with depth information
+//   const generateAccounts = (count: number) => {
+//     // Start with the search query as the central account if it looks like an address
+//     const centralAccount = searchQuery.length >= 32 ? searchQuery : `wallet${Math.floor(random() * 1000000)}`;
+    
+//     const accounts = [centralAccount];
+//     const depthMap = { [centralAccount]: 0 }; // Central account has depth 0
+    
+//     // Generate additional accounts with increasing depth
+//     let currentDepth = 1;
+//     let accountsAtCurrentDepth = 1;
+    
+//     for (let i = 1; i < count; i++) {
+//       // If we've reached max depth, stop adding new depths
+//       if (currentDepth > maxDepth) {
+//         break;
+//       }
+      
+//       const account = `wallet${Math.floor(random() * 1000000)}`;
+//       accounts.push(account);
+//       depthMap[account] = currentDepth;
+      
+//       // Every N accounts, increase the depth level
+//       accountsAtCurrentDepth--;
+//       if (accountsAtCurrentDepth <= 0) {
+//         currentDepth++;
+//         // Each depth level has more accounts than the previous one
+//         accountsAtCurrentDepth = Math.min(count - i, Math.floor(3 * Math.pow(2, currentDepth - 1)));
+//       }
+//     }
+    
+//     return { accounts, depthMap };
+//   };
+  
+//   // Generate sample clusters
+//   const clusterCount = 3 + Math.floor(random() * 5);
+//   const clusters = [];
+//   const programs = [
+//     "11111111111111111111111111111111", // System Program
+//     "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", // Token Program
+//     "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", // Jupiter
+//     "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc", // Orca
+//   ];
+  
+//   const clusterTypes = ["Sequential Transfers", "Fan-out", "Fan-in", "Swap", "Mixed Activity"];
+  
+//   for (let i = 0; i < clusterCount; i++) {
+//     const accountCount = 5 + Math.floor(random() * 20);
+//     const { accounts, depthMap } = generateAccounts(accountCount);
+    
+//     const transactionCount = 3 + Math.floor(random() * 10);
+//     const transactions = Array.from({ length: transactionCount }, (_, j) => `tx${j}${Math.floor(random() * 1000000)}`);
+    
+//     // Select a subset of programs for this cluster
+//     const clusterPrograms = programs.filter(() => random() > 0.5);
+//     if (clusterPrograms.length === 0) {
+//       clusterPrograms.push(programs[0]); // Always include at least one program
+//     }
+    
+//     const clusterType = clusterTypes[Math.floor(random() * clusterTypes.length)];
+//     const timestamp = Date.now() - Math.floor(random() * 30 * 24 * 60 * 60 * 1000); // Random time in the last 30 days
+    
+//     // Determine if this should be a suspicious cluster
+//     const isSuspicious = random() < 0.3;
+    
+//     const cluster: TransactionCluster = {
+//       id: `cluster-${i + 1}-${timestamp}`,
+//       accounts: accounts.slice(0, (maxDepth === Infinity) ? accounts.length : Math.min(accounts.length, 5 + maxDepth * 3)),
+//       transactions,
+//       programs: clusterPrograms,
+//       totalValue: Math.floor(random() * 1000) / 10,
+//       timestamp,
+//       type: clusterType,
+//       depthMap
+//     };
+    
+//     // Add risk factors for suspicious clusters
+//     if (isSuspicious) {
+//       cluster.risk = {
+//         score: 30 + Math.floor(random() * 50),
+//         reasons: [
+//           "Suspicious transaction pattern detected",
+//           random() < 0.5 ? "Large value movement in short time" : "Multiple intermediary accounts used",
+//           random() < 0.5 ? "Known high-risk program interaction" : "Circular fund flow detected"
+//         ]
+//       };
+//     }
+    
+//     clusters.push(cluster);
+//   }
+  
+//   // Flag suspicious clusters
+//   const flaggedClusters = clusters.filter(cluster => cluster.risk && cluster.risk.score >= 30);
+  
+//   // Generate wallet groups
+//   const walletGroups = {
+//     groups: Array.from({ length: 2 + Math.floor(random() * 3) }, (_, i) => {
+//       // Randomly select a subset of accounts from different clusters
+//       return Array.from({ length: 3 + Math.floor(random() * 5) }, () => {
+//         const randomCluster = clusters[Math.floor(random() * clusters.length)];
+//         const randomAccountIndex = Math.floor(random() * randomCluster.accounts.length);
+//         return randomCluster.accounts[randomAccountIndex];
+//       });
+//     }),
+//     strength: Array.from({ length: 2 + Math.floor(random() * 3) }, () => {
+//       const r = random();
+//       if (r < 0.3) return 'High';
+//       if (r < 0.7) return 'Medium';
+//       return 'Low';
+//     }) as ('High' | 'Medium' | 'Low')[]
+//   };
+  
+//   return {
+//     clusters,
+//     flaggedClusters,
+//     walletGroups,
+//     ringClusters: flaggedClusters.filter(() => random() > 0.7)
+//   };
+// }

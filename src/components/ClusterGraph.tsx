@@ -28,6 +28,7 @@ interface GraphData {
 interface ClusterGraphProps {
   cluster: TransactionCluster;
   className?: string;
+  showDepthLegend?: boolean; // Add option to show depth legend
 }
 
 // Known program mappings for better labeling
@@ -44,7 +45,11 @@ const PROGRAM_LABELS: Record<string, string> = {
   "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s": "Metadata Program",
 };
 
-const ClusterGraph: React.FC<ClusterGraphProps> = ({ cluster, className = "" }) => {
+const ClusterGraph: React.FC<ClusterGraphProps> = ({ 
+  cluster, 
+  className = "",
+  showDepthLegend = true // Default to showing the legend
+}) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [tooltip, setTooltip] = useState({
@@ -239,6 +244,15 @@ const ClusterGraph: React.FC<ClusterGraphProps> = ({ cluster, className = "" }) 
     return formatAddress(programId, 4);
   }
 
+  // Get node depth from the cluster's depthMap 
+  const getNodeDepth = (id: string): number => {
+    if (cluster.depthMap && cluster.depthMap[id] !== undefined) {
+      return cluster.depthMap[id];
+    }
+    // Default to depth 0 if not found
+    return 0;
+  };
+
   // D3 visualization
   useEffect(() => {
     if (!svgRef.current || !graphData) return;
@@ -283,44 +297,108 @@ const ClusterGraph: React.FC<ClusterGraphProps> = ({ cluster, className = "" }) 
       .attr("d", "M0,-5L10,0L0,5")
       .attr("class", "text-muted-foreground fill-current");
 
-    // Create a force simulation with custom forces for different node types
+    // Calculate max depth for color scaling
+    let maxDepth = 0;
+    if (cluster.depthMap) {
+      maxDepth = Math.max(...Object.values(cluster.depthMap));
+    }
+
+    // Get node opacity based on depth
+    const getNodeOpacity = (d: any): number => {
+      if (d.isProgram) return 1; // Programs always fully visible
+      
+      const depth = getNodeDepth(d.id);
+      return 1 - (depth * 0.15); // Decrease opacity with depth
+    };
+
+    // Get node size based on depth and type
+    const getNodeSize = (d: any): number => {
+      if (d.isProgram) return 15; // Programs keep their size
+      
+      const depth = getNodeDepth(d.id);
+      return Math.max(4, 12 - (depth * 2)); // Larger nodes for lower depths
+    };
+
+    // Create force simulation with parameters adjusted for depth
     const simulation = d3.forceSimulation(graphData.nodes)
       .force("link", d3.forceLink(graphData.links)
         .id(d => (d as any).id)
         .distance(d => {
           // Program links should be shorter
           if ((d as any).type === 'program') return 80;
-          return 150;
+          
+          // Distance increases with depth
+          const sourceDepth = getNodeDepth((d.source as any).id);
+          const targetDepth = getNodeDepth((d.target as any).id);
+          const maxLinkDepth = Math.max(sourceDepth, targetDepth);
+          
+          return 100 + (maxLinkDepth * 30); // Longer distance for higher depth links
         })
         .strength(d => {
           // Program links should be stronger
           if ((d as any).type === 'program') return 0.8;
-          return 0.3;
+          
+          // Connection strength decreases with depth
+          const sourceDepth = getNodeDepth((d.source as any).id);
+          const targetDepth = getNodeDepth((d.target as any).id);
+          const maxLinkDepth = Math.max(sourceDepth, targetDepth);
+          
+          return Math.max(0.1, 0.5 - (maxLinkDepth * 0.1)); // Weaker links for higher depths
         }))
       .force("charge", d3.forceManyBody()
         .strength(d => {
           // Programs repel more strongly
           if ((d as any).isProgram) return -400;
-          return -200;
+          
+          // Repulsion decreases with depth
+          const depth = getNodeDepth((d as any).id);
+          return -200 + (depth * 50); // Less repulsion for higher depths
         }))
       .force("center", d3.forceCenter(width / 2, height / 2))
       .force("x", d3.forceX()
-        .strength(d => (d as any).isProgram ? 0.1 : 0.05))
+        .strength(d => {
+          const depth = getNodeDepth((d as any).id);
+          return (d as any).isProgram ? 0.1 : 0.05 - (depth * 0.01);
+        }))
       .force("y", d3.forceY()
-        .strength(d => (d as any).isProgram ? 0.1 : 0.05))
+        .strength(d => {
+          const depth = getNodeDepth((d as any).id);
+          return (d as any).isProgram ? 0.1 : 0.05 - (depth * 0.01);
+        }))
       .force("collision", d3.forceCollide()
-        .radius(d => ((d as any).isProgram ? 40 : 20))
+        .radius(d => {
+          const depth = getNodeDepth((d as any).id);
+          return ((d as any).isProgram ? 40 : 20) - (depth * 3);
+        })
         .strength(0.7));
 
-    // Draw links
+    // Draw links with opacity based on depth
     const link = g.append("g")
       .selectAll("path")
       .data(graphData.links)
       .join("path")
-      .attr("class", d => `stroke-current ${
-        d.type === 'program' ? 'text-amber-500 opacity-40' : 'text-muted-foreground opacity-60'
-      }`)
-      .attr("stroke-width", d => Math.sqrt(d.value) * 1.5)
+      .attr("class", d => {
+        const sourceDepth = getNodeDepth((d.source as any).id);
+        const targetDepth = getNodeDepth((d.target as any).id);
+        const maxLinkDepth = Math.max(sourceDepth, targetDepth);
+        
+        // Different styling based on depth and type
+        const opacityValue = Math.max(20, 60 - (maxLinkDepth * 15));
+        
+        if (d.type === 'program') {
+          return `stroke-current text-amber-500 opacity-${opacityValue / 100}`;
+        } else {
+          return `stroke-current text-muted-foreground opacity-${opacityValue / 100}`;
+        }
+      })
+      .attr("stroke-width", d => {
+        const sourceDepth = getNodeDepth((d.source as any).id);
+        const targetDepth = getNodeDepth((d.target as any).id);
+        const maxLinkDepth = Math.max(sourceDepth, targetDepth);
+        
+        // Thinner lines for higher depths
+        return Math.max(0.5, Math.sqrt(d.value) * (1.5 - (maxLinkDepth * 0.25)));
+      })
       .attr("marker-end", d => d.type !== 'program' ? "url(#arrow)" : null);
 
     // Draw nodes
@@ -333,21 +411,45 @@ const ClusterGraph: React.FC<ClusterGraphProps> = ({ cluster, className = "" }) 
       .on("mousemove", handleNodeMousemove)
       .on("mouseout", handleNodeMouseout);
 
-    // Node circles with different styling based on type
+    // Node circles with different styling based on type and depth
     node.append("circle")
-      .attr("r", d => (d as any).isProgram ? 15 : 8)
+      .attr("r", d => getNodeSize(d))
       .attr("class", d => {
         if ((d as any).isProgram) {
           return "fill-amber-500 stroke-amber-300 stroke-2";
         }
         
-        // Different colors for regular accounts based on group
-        switch ((d as any).group) {
-          case 1: return "fill-solana-purple stroke-white stroke-1";
-          case 2: return "fill-solana-blue stroke-white stroke-1";
-          case 3: return "fill-solana-green stroke-white stroke-1";
-          default: return "fill-muted-foreground stroke-white stroke-1";
+        // Get depth for this node
+        const depth = getNodeDepth((d as any).id);
+        
+        // For depth 0 (starting point), use special color
+        if (depth === 0) {
+          return "fill-solana-purple stroke-white stroke-2";
         }
+        
+        // For depth 1, use slightly different color
+        if (depth === 1) {
+          return "fill-solana-blue stroke-white stroke-1";
+        }
+        
+        // For depth 2+
+        return "fill-solana-green stroke-white stroke-1 opacity-90";
+      });
+
+    // Add concentric circles to indicate depth
+    node.filter(d => {
+      const depth = getNodeDepth((d as any).id);
+      return depth === 0; // Only add to depth 0 nodes (starting points)
+    })
+    .append("circle")
+    .attr("r", 16)
+    .attr("class", "fill-none stroke-solana-purple stroke-1 opacity-30");
+    
+    // Add depth indicator visually to each node
+    node.append("title")
+      .text(d => {
+        const depth = getNodeDepth((d as any).id);
+        return `Depth: ${depth} hop${depth !== 1 ? 's' : ''}`;
       });
 
     // Add icons or symbols inside circles
@@ -369,9 +471,12 @@ const ClusterGraph: React.FC<ClusterGraphProps> = ({ cluster, className = "" }) 
 
     // Mouse event handlers for tooltip
     function handleNodeMouseover(event: any, d: any) {
+      const depth = getNodeDepth(d.id);
+      const depthInfo = `<div class="text-xs ${depth === 0 ? "text-solana-purple" : "text-muted-foreground"}">Depth: ${depth} hop${depth !== 1 ? 's' : ''}</div>`;
+      
       const content = d.isProgram
-        ? `<div class="font-medium">${d.label}</div><div class="text-xs text-muted-foreground">Program</div>`
-        : `<div class="font-medium">${formatAddress(d.id, 8)}</div><div class="text-xs text-muted-foreground">Wallet</div>`;
+        ? `<div class="font-medium">${d.label}</div><div class="text-xs text-muted-foreground">Program</div>${depthInfo}`
+        : `<div class="font-medium">${formatAddress(d.id, 8)}</div><div class="text-xs text-muted-foreground">Wallet</div>${depthInfo}`;
         
       setTooltip({
         visible: true,
@@ -444,7 +549,7 @@ const ClusterGraph: React.FC<ClusterGraphProps> = ({ cluster, className = "" }) 
     return () => {
       simulation.stop();
     };
-  }, [graphData]);
+  }, [graphData, cluster]);
 
   if (!cluster) {
     return (
@@ -469,6 +574,24 @@ const ClusterGraph: React.FC<ClusterGraphProps> = ({ cluster, className = "" }) 
           }}
           dangerouslySetInnerHTML={{ __html: tooltip.content }}
         />
+      )}
+      
+      {showDepthLegend && (
+        <div className="absolute top-2 left-2 bg-card/90 p-2 rounded-md border border-border text-xs">
+          <div className="mb-1 font-medium">Connection Depth</div>
+          <div className="flex items-center gap-1 mb-1">
+            <div className="w-3 h-3 rounded-full bg-solana-purple"></div>
+            <span>Direct (0 hops)</span>
+          </div>
+          <div className="flex items-center gap-1 mb-1">
+            <div className="w-3 h-3 rounded-full bg-solana-blue"></div>
+            <span>1 hop away</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="w-3 h-3 rounded-full bg-solana-green opacity-90"></div>
+            <span>2+ hops away</span>
+          </div>
+        </div>
       )}
       
       <div className="absolute bottom-2 right-2 text-xs bg-card/80 p-2 rounded-md text-muted-foreground">

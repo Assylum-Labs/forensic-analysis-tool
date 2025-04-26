@@ -13,6 +13,13 @@ export interface TransactionCluster {
     score: number;
     reasons: string[];
   };
+  depthMap?: Record<string, number>; // New field to store node depths
+  entities?: Array<{
+    name: string;
+    type: string;
+    verified: boolean;
+    accounts: string[];
+  }>;
 }
 
 export interface ClusteringResult {
@@ -48,7 +55,10 @@ const SUSPICIOUS_PATTERNS = [
 ];
 
 // Main clustering function
-export async function clusterTransactions(transactions: VersionedTransactionResponse[]): Promise<ClusteringResult> {
+export async function clusterTransactions(
+  transactions: VersionedTransactionResponse[], 
+  maxDepth: number = Infinity // New parameter to control depth
+): Promise<ClusteringResult> {
   const graph = new Map<string, Set<string>>(); // Account to connected accounts
   const transactionMap = new Map<string, Set<string>>(); // Transaction to involved accounts
   const accountToTransactions = new Map<string, Set<string>>(); // Account to transactions
@@ -70,8 +80,8 @@ export async function clusterTransactions(transactions: VersionedTransactionResp
     addTransactionToGraph(graph, transactionMap, accountToTransactions, signature, involvedAccounts);
   }
 
-  // Find connected components (clusters)
-  const clusters = findConnectedComponents(graph, transactionMap, accountToTransactions);
+  // Find connected components (clusters) with depth limit
+  const clusters = findConnectedComponents(graph, transactionMap, accountToTransactions, maxDepth);
 
   // Analyze clusters for metadata and flag unusual behavior
   const analyzedClusters = await Promise.all(
@@ -162,33 +172,50 @@ function addTransactionToGraph(
   }
 }
 
-// Find connected components in the graph to identify clusters
+// Find connected components in the graph to identify clusters using BFS with depth control
 function findConnectedComponents(
   graph: Map<string, Set<string>>,
   transactionMap: Map<string, Set<string>>,
-  accountToTransactions: Map<string, Set<string>>
+  accountToTransactions: Map<string, Set<string>>,
+  maxDepth: number = Infinity  // New parameter with default value of Infinity
 ): TransactionCluster[] {
   const visited = new Set<string>();
   const clusters: TransactionCluster[] = [];
   
-  // DFS to find connected components
-  function dfs(node: string, component: Set<string>) {
-    visited.add(node);
-    component.add(node);
+  // BFS to find connected components with depth tracking
+  function bfsWithDepth(startNode: string): { component: Set<string>, nodeDepths: Map<string, number> } {
+    const component = new Set<string>();
+    const queue: Array<{node: string, depth: number}> = [{node: startNode, depth: 0}];
+    const nodeDepths = new Map<string, number>();
     
-    // Visit all neighbors
-    for (const neighbor of graph.get(node) || []) {
-      if (!visited.has(neighbor)) {
-        dfs(neighbor, component);
+    component.add(startNode);
+    visited.add(startNode);
+    nodeDepths.set(startNode, 0);
+    
+    while (queue.length > 0) {
+      const {node, depth} = queue.shift()!;
+      
+      // Only process neighbors if we haven't reached max depth
+      if (depth < maxDepth) {
+        // Visit all neighbors
+        for (const neighbor of graph.get(node) || []) {
+          if (!visited.has(neighbor)) {
+            visited.add(neighbor);
+            component.add(neighbor);
+            nodeDepths.set(neighbor, depth + 1);
+            queue.push({node: neighbor, depth: depth + 1});
+          }
+        }
       }
     }
+    
+    return { component, nodeDepths };
   }
   
   // Find all connected components
   for (const node of graph.keys()) {
     if (!visited.has(node)) {
-      const component = new Set<string>();
-      dfs(node, component);
+      const { component, nodeDepths } = bfsWithDepth(node);
       
       // Get all transactions involving these accounts
       const transactions = new Set<string>();
@@ -199,15 +226,19 @@ function findConnectedComponents(
         }
       });
       
-      // Create a cluster with a unique ID
-      clusters.push({
-        id: `cluster-${clusters.length + 1}-${Date.now()}`,
-        transactions: Array.from(transactions),
-        accounts: Array.from(component),
-        programs: [], // Will be filled in analyzeClusterMetadata
-        totalValue: 0, // Will be filled in analyzeClusterMetadata
-        timestamp: Date.now() // Current timestamp as placeholder
-      });
+      // Only create a cluster if there are sufficient connections
+      if (component.size > 1 || transactions.size > 0) {
+        // Create a cluster with a unique ID
+        clusters.push({
+          id: `cluster-${clusters.length + 1}-${Date.now()}`,
+          transactions: Array.from(transactions),
+          accounts: Array.from(component),
+          programs: [], // Will be filled in analyzeClusterMetadata
+          totalValue: 0, // Will be filled in analyzeClusterMetadata
+          timestamp: Date.now(), // Current timestamp as placeholder
+          depthMap: Object.fromEntries([...nodeDepths.entries()]) // Store depth information
+        });
+      }
     }
   }
   

@@ -56,6 +56,7 @@ export default function TransactionClusteringPage() {
   const [clusterStats, setClusterStats] = useState<any>(null)
   const [filterType, setFilterType] = useState<string>('')
   const [showDatePicker, setShowDatePicker] = useState(false)
+  const [maxDepth, setMaxDepth] = useState<number>(2) // Default to 2 hops
   const { toast } = useToast()
 
   // Update start date when timeframe changes
@@ -106,13 +107,14 @@ export default function TransactionClusteringPage() {
     setSelectedCluster(null)
     
     try {
-      // Fetch and analyze clusters with date range
+      // Fetch and analyze clusters with date range and max depth
       const results = await fetchAndClusterTransactions(searchQuery, {
         timeframe,
         startDate,
         endDate,
         filterType: filterType || undefined,
-        batchSize: timeframe === 'month' || timeframe === 'all' ? 50 : 100 // Smaller batch size for longer periods
+        batchSize: timeframe === 'month' || timeframe === 'all' ? 50 : 100, // Smaller batch size for longer periods
+        maxDepth // Include the maxDepth parameter
       })
       
       // Update state with results
@@ -130,7 +132,7 @@ export default function TransactionClusteringPage() {
       // Show success message
       toast({
         title: "Clustering Complete",
-        description: `Identified ${results.clusters.length} transaction clusters and ${results.flaggedClusters.length} suspicious patterns`
+        description: `Identified ${results.clusters.length} transaction clusters with max depth of ${maxDepth === Infinity ? "all" : maxDepth} hops`
       })
     } catch (error) {
       console.error("Clustering error:", error)
@@ -290,6 +292,36 @@ export default function TransactionClusteringPage() {
               </div>
             </div>
           )}
+
+          {/* Connection depth slider */}
+          <div className="mt-4 flex flex-col sm:flex-row gap-4 items-center bg-muted/20 p-3 rounded-md border border-border">
+            <div className="text-sm text-muted-foreground flex-shrink-0">
+              Max Connection Depth:
+            </div>
+            <div className="flex-1 flex flex-col gap-1">
+              <div className="flex justify-between text-xs text-muted-foreground px-2">
+                <span>1 Hop</span>
+                <span>2 Hops</span>
+                <span>3 Hops</span>
+                <span>All</span>
+              </div>
+              <input
+                type="range"
+                min="1"
+                max="4"
+                step="1"
+                value={maxDepth === Infinity ? 4 : maxDepth}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value);
+                  setMaxDepth(value === 4 ? Infinity : value);
+                }}
+                className="w-full"
+              />
+            </div>
+            <div className="px-3 py-1 rounded-full bg-solana-purple/10 text-solana-purple text-sm flex-shrink-0">
+              {maxDepth === Infinity ? "All Connections" : `${maxDepth} Hop${maxDepth !== 1 ? 's' : ''}`}
+            </div>
+          </div>
 
           {/* Show analysis progress when loading */}
           {isLoading && (
@@ -473,6 +505,7 @@ export default function TransactionClusteringPage() {
                         <ClusterGraph 
                           cluster={selectedCluster} 
                           className="h-full w-full"
+                          showDepthLegend={true}
                         />
                       ) : (
                         <div className="h-full flex items-center justify-center text-muted-foreground">
