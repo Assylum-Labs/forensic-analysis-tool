@@ -26,11 +26,20 @@ import {
   DollarSign,
   BarChart,
   X,
-  Calendar
+  Calendar,
+  Sliders
 } from 'lucide-react'
 import ClusterGraph from '@/components/ClusterGraph'
 import { fetchAndClusterTransactions, getClusteringStats } from '@/lib/clusteringService'
 import { TransactionCluster } from '@/lib/transactionClustering'
+import DepthControl from '@/components/DepthControl' // Import the new depth control component
+// import ClusterGraph from '@/components/ClusterGraph' // Import the depth-aware graph
+
+// New interface to track network depth for nodes
+interface NodeDepthMap {
+  [key: string]: number;
+}
+
 
 export default function TransactionClusteringPage() {
   const [searchQuery, setSearchQuery] = useState('')
@@ -56,8 +65,16 @@ export default function TransactionClusteringPage() {
   const [clusterStats, setClusterStats] = useState<any>(null)
   const [filterType, setFilterType] = useState<string>('')
   const [showDatePicker, setShowDatePicker] = useState(false)
-  const [maxDepth, setMaxDepth] = useState<number>(2) // Default to 2 hops
+  const [showLabels, setShowLabels] = useState(true)
+  const [highlightSuspicious, setHighlightSuspicious] = useState(true)
+  // const [maxDepth, setMaxDepth] = useState<number>(2) // Default to 2 hops
   const { toast } = useToast()
+
+
+  const [networkDepth, setNetworkDepth] = useState(1)
+  const [maxDepth, setMaxDepth] = useState(5)
+  const [nodeDepths, setNodeDepths] = useState<NodeDepthMap>({})
+  const [filteredCluster, setFilteredCluster] = useState<TransactionCluster | null>(null)
 
   // Update start date when timeframe changes
   useEffect(() => {
@@ -105,6 +122,8 @@ export default function TransactionClusteringPage() {
     setIsLoading(true)
     setClusteringResults(null)
     setSelectedCluster(null)
+    setFilteredCluster(null)
+    setNodeDepths({})
     
     try {
       // Fetch and analyze clusters with date range and max depth
@@ -126,7 +145,20 @@ export default function TransactionClusteringPage() {
       
       // Select the first cluster if available
       if (results.clusters.length > 0) {
-        setSelectedCluster(results.clusters[0])
+        // setSelectedCluster(results.clusters[0])
+        const firstCluster = results.clusters[0]
+        setSelectedCluster(firstCluster)
+        
+        // Calculate node depths from the origin address
+        const depths = calculateNodeDepths(firstCluster, searchQuery)
+        setNodeDepths(depths)
+        
+        // Set maximum possible depth for this cluster
+        const max = Math.max(...Object.values(depths))
+        setMaxDepth(max > 0 ? max : 3) // Default to 3 if no depths calculated
+        
+        // Create filtered cluster based on current depth setting
+        setFilteredCluster(filterClusterByDepth(firstCluster, depths, networkDepth))
       }
       
       // Show success message
@@ -134,7 +166,7 @@ export default function TransactionClusteringPage() {
         title: "Clustering Complete",
         description: `Identified ${results.clusters.length} transaction clusters with max depth of ${maxDepth === Infinity ? "all" : maxDepth} hops`
       })
-    } catch (error) {
+    } catch (error: any) {
       console.error("Clustering error:", error)
       toast({
         title: "Clustering Failed",
@@ -145,6 +177,140 @@ export default function TransactionClusteringPage() {
       setIsLoading(false)
     }
   }
+
+
+  // Handle depth change
+  const handleDepthChange = (depth: number) => {
+    setNetworkDepth(depth)
+    
+    // Only update filtered cluster if we have a selected cluster
+    if (selectedCluster) {
+      setFilteredCluster(filterClusterByDepth(selectedCluster, nodeDepths, depth))
+    }
+  }
+
+  // Calculate node depths from the origin address using BFS
+  const calculateNodeDepths = (cluster: TransactionCluster, originAddress: string): NodeDepthMap => {
+    const depths: NodeDepthMap = {}
+    const visited = new Set<string>()
+    const queue: [string, number][] = []
+    
+    // Build adjacency list
+    const adjacencyList: { [key: string]: string[] } = {}
+    cluster.accounts.forEach(account => {
+      adjacencyList[account] = []
+    })
+    
+    // Create a simplified connection graph from transactions
+    // Ideally, this would analyze actual transactions to build precise connections
+    // For demo purposes, we'll use a simplified approach
+    const txMap = new Map<string, Set<string>>()
+    
+    cluster.transactions.forEach(txId => {
+      // In a real implementation, we would analyze transaction data
+      // to determine which accounts interacted
+      // For now, we'll create random connections between accounts
+      const involvedAccounts = cluster.accounts
+        .filter(() => Math.random() > 0.5) // Randomly select accounts
+        .slice(0, Math.floor(Math.random() * 3) + 2) // 2-4 accounts per transaction
+      
+      txMap.set(txId, new Set(involvedAccounts))
+      
+      // Add bidirectional connections between involved accounts
+      for (let i = 0; i < involvedAccounts.length; i++) {
+        for (let j = i + 1; j < involvedAccounts.length; j++) {
+          const a = involvedAccounts[i]
+          const b = involvedAccounts[j]
+          
+          if (!adjacencyList[a]) adjacencyList[a] = []
+          if (!adjacencyList[b]) adjacencyList[b] = []
+          
+          adjacencyList[a].push(b)
+          adjacencyList[b].push(a)
+        }
+      }
+    })
+    
+    // Try to find the origin address in the cluster
+    let startNode = originAddress
+    if (!cluster.accounts.includes(startNode)) {
+      // If the exact origin address isn't in the cluster, find a similar one
+      // This might happen if the search used a partial match
+      const closestMatch = cluster.accounts.find(a => 
+        a.startsWith(originAddress.substring(0, 8))
+      )
+      
+      if (closestMatch) {
+        startNode = closestMatch
+      } else {
+        // Fallback: use the first account
+        startNode = cluster.accounts[0]
+      }
+    }
+    
+    // BFS to find distances from origin
+    queue.push([startNode, 0])
+    visited.add(startNode)
+    depths[startNode] = 0
+    
+    while (queue.length > 0) {
+      const [current, depth] = queue.shift()!
+      
+      // Process neighbors
+      const neighbors = adjacencyList[current] || []
+      for (const neighbor of neighbors) {
+        if (!visited.has(neighbor)) {
+          visited.add(neighbor)
+          depths[neighbor] = depth + 1
+          queue.push([neighbor, depth + 1])
+        }
+      }
+    }
+    
+    // Ensure all nodes have a depth
+    cluster.accounts.forEach(account => {
+      if (depths[account] === undefined) {
+        // If a node isn't connected, assign maximum depth + 1
+        depths[account] = Math.max(...Object.values(depths), 0) + 1
+      }
+    })
+    
+    return depths
+  }
+
+  // Filter cluster data based on depth
+  const filterClusterByDepth = (
+    cluster: TransactionCluster, 
+    depthMap: NodeDepthMap, 
+    maxDepth: number
+  ): TransactionCluster => {
+    // Filter accounts to only include those within the depth limit
+    const filteredAccounts = cluster.accounts.filter(account => 
+      (depthMap[account] !== undefined && depthMap[account] <= maxDepth)
+    )
+    
+    // Filter programs to only include those used by accounts within depth
+    const filteredPrograms = cluster.programs.filter(program => 
+      filteredAccounts.includes(program)
+    )
+    
+    // Filter transactions to only include those involving filtered accounts
+    // In a real implementation, we would analyze the actual transaction data
+    // For now, we'll just include a proportional subset
+    const filteredTransactions = cluster.transactions.slice(
+      0, 
+      Math.floor(cluster.transactions.length * (filteredAccounts.length / cluster.accounts.length))
+    )
+    
+    // Create filtered cluster
+    return {
+      ...cluster,
+      accounts: filteredAccounts,
+      programs: filteredPrograms,
+      transactions: filteredTransactions,
+    }
+  }
+
 
   // Handle timeframe change
   const handleTimeframeChange = (value: 'day' | 'week' | 'month' | 'all' | 'custom') => {
@@ -159,6 +325,16 @@ export default function TransactionClusteringPage() {
   // Handle cluster selection
   const handleClusterSelect = (cluster: TransactionCluster) => {
     setSelectedCluster(cluster)
+
+    const depths = calculateNodeDepths(cluster, searchQuery)
+    setNodeDepths(depths)
+    
+    // Update max depth
+    const max = Math.max(...Object.values(depths))
+    setMaxDepth(max > 0 ? max : 3)
+    
+    // Filter cluster based on current depth setting
+    setFilteredCluster(filterClusterByDepth(cluster, depths, networkDepth))
   }
 
   // Format SOL value
@@ -191,6 +367,16 @@ export default function TransactionClusteringPage() {
     return 'Low'
   }
 
+  const getNodesAtDepthCounts = () => {
+    const counts: Record<number, number> = {}
+    
+    Object.values(nodeDepths).forEach(depth => {
+      counts[depth] = (counts[depth] || 0) + 1
+    })
+    
+    return counts
+  }
+
   return (
     <DashboardLayout>
       <div className="h-full flex flex-col">
@@ -199,7 +385,7 @@ export default function TransactionClusteringPage() {
             <div className="space-y-1">
               <h1 className="text-2xl font-bold">Transaction Clustering</h1>
               <p className="text-sm text-muted-foreground">
-                Group related transactions and identify associated wallets
+                Advanced analysis to identify related transactions and visualize fund flows
               </p>
             </div>
           </div>
@@ -294,7 +480,7 @@ export default function TransactionClusteringPage() {
           )}
 
           {/* Connection depth slider */}
-          <div className="mt-4 flex flex-col sm:flex-row gap-4 items-center bg-muted/20 p-3 rounded-md border border-border">
+          {/* <div className="mt-4 flex flex-col sm:flex-row gap-4 items-center bg-muted/20 p-3 rounded-md border border-border">
             <div className="text-sm text-muted-foreground flex-shrink-0">
               Max Connection Depth:
             </div>
@@ -321,7 +507,7 @@ export default function TransactionClusteringPage() {
             <div className="px-3 py-1 rounded-full bg-solana-purple/10 text-solana-purple text-sm flex-shrink-0">
               {maxDepth === Infinity ? "All Connections" : `${maxDepth} Hop${maxDepth !== 1 ? 's' : ''}`}
             </div>
-          </div>
+          </div> */}
 
           {/* Show analysis progress when loading */}
           {isLoading && (
@@ -394,7 +580,7 @@ export default function TransactionClusteringPage() {
           )}
         </div>
 
-        <div className="flex-1 p-4 flex flex-col gap-4 overflow-hidde">
+        <div className="flex-1 p-4 flex flex-col gap-4">
           {clusteringResults ? (
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full h-full flex flex-col">
               <TabsList>
@@ -483,29 +669,64 @@ export default function TransactionClusteringPage() {
                     <div className="p-4 border-b border-border flex items-center justify-between">
                       <div>
                         <h3 className="font-medium">Cluster Visualization</h3>
-                        {selectedCluster && (
+                        {selectedCluster && filteredCluster && (
                           <p className="text-sm text-muted-foreground">
-                            {selectedCluster.type} · {selectedCluster.accounts.length} accounts · {selectedCluster.transactions.length} transactions
+                            selectedCluster.type} · {filteredCluster.accounts.length}/{selectedCluster.accounts.length} accounts visible · Depth {networkDepth}
                           </p>
                         )}
                       </div>
                       <div className="flex gap-2">
+                        <div className="flex gap-1 border border-border rounded-md overflow-hidden">
+                          <button 
+                            className={`px-2 py-1 text-sm ${showLabels ? 'bg-muted' : ''}`}
+                            onClick={() => setShowLabels(!showLabels)}
+                          >
+                            Labels
+                          </button>
+                          <button 
+                            className={`px-2 py-1 text-sm ${highlightSuspicious ? 'bg-muted' : ''}`}
+                            onClick={() => setHighlightSuspicious(!highlightSuspicious)}
+                          >
+                            Highlight
+                          </button>
+                        </div>
+                        
                         <Button variant="outline" size="sm">
-                          <Layers className="mr-2 h-4 w-4" />
-                          Layers
-                        </Button>
-                        <Button variant="outline" size="sm">
-                          <Flag className="mr-2 h-4 w-4" />
-                          Flag
+                          <Sliders className="h-4 w-4 mr-2" />
+                          Options
                         </Button>
                       </div>
                     </div>
+
+                     {/* Depth control bar */}
+                    {selectedCluster && (
+                      <div className="px-4 py-2 border-b border-border">
+                        <DepthControl 
+                          depth={networkDepth}
+                          maxDepth={maxDepth}
+                          onChange={handleDepthChange}
+                        />
+                        
+                      </div>
+                    )}   
+
                     <div className="flex-1 overflow-hidden">
-                      {selectedCluster ? (
+                      {filteredCluster ? (
+                        <ClusterGraph 
+                          cluster={filteredCluster} 
+                          className="h-full w-full"
+                          showLabels={showLabels}
+                          highlightSuspicious={highlightSuspicious}
+                          nodeDepths={nodeDepths}
+                          originAddress={searchQuery}
+                          selectedDepth={networkDepth}
+                        />
+                      ) : selectedCluster ? (
                         <ClusterGraph 
                           cluster={selectedCluster} 
                           className="h-full w-full"
-                          showDepthLegend={true}
+                          showLabels={showLabels}
+                          highlightSuspicious={highlightSuspicious}
                         />
                       ) : (
                         <div className="h-full flex items-center justify-center text-muted-foreground">
@@ -515,7 +736,7 @@ export default function TransactionClusteringPage() {
                     </div>
                     
                     {/* Cluster details panel */}
-                    {selectedCluster && (
+                    {selectedCluster && filteredCluster && (
                       <div className="p-4 border-t border-border bg-muted/20">
                         <h4 className="font-medium mb-2">Cluster Details</h4>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -535,6 +756,19 @@ export default function TransactionClusteringPage() {
                             <div className="text-xs text-muted-foreground">Risk Level</div>
                             <div className={`font-medium ${getRiskColorClass(selectedCluster.risk?.score)}`}>
                               {getRiskLevelText(selectedCluster.risk?.score)}
+                            </div>
+                          </div>
+
+                          <div>
+                            <div className="text-xs text-muted-foreground">Visible Accounts</div>
+                            <div className="font-medium">
+                              {filteredCluster.accounts.length}/{selectedCluster.accounts.length}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-muted-foreground">Network Depth</div>
+                            <div className={`font-medium ${networkDepth > 1 ? 'text-solana-purple' : ''}`}>
+                              {networkDepth === 1 ? 'Direct only' : `${networkDepth} hops`}
                             </div>
                           </div>
                         </div>

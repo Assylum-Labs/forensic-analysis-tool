@@ -1,57 +1,34 @@
-// src/components/ClusterGraph.tsx
+"use client"
+
 import React, { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import { formatAddress } from '@/lib/utils';
 import { TransactionCluster } from '@/lib/transactionClustering';
 
-interface Node {
-  id: string;
-  group: number;
-  type?: string;
-  label?: string;
-  volume?: number;
-  isProgram?: boolean;
+interface NodeDepthMap {
+  [key: string]: number;
 }
 
-interface Link {
-  source: string | Node;
-  target: string | Node;
-  value: number;
-  type?: string;
-}
-
-interface GraphData {
-  nodes: Node[];
-  links: Link[];
-}
-
-interface ClusterGraphProps {
-  cluster: TransactionCluster;
+interface DepthAwareClusterGraphProps {
   className?: string;
-  showDepthLegend?: boolean; // Add option to show depth legend
+  cluster: TransactionCluster;
+  showLabels?: boolean;
+  highlightSuspicious?: boolean;
+  nodeDepths?: NodeDepthMap;
+  originAddress?: string;
+  selectedDepth?: number;
 }
 
-// Known program mappings for better labeling
-const PROGRAM_LABELS: Record<string, string> = {
-  "11111111111111111111111111111111": "System Program",
-  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA": "Token Program",
-  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL": "Assoc. Token Program",
-  "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4": "Jupiter",
-  "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc": "Orca",
-  "SwaPpA9LAaLfeLi3a68M4DjnLqgtticKg6CnyNwgAC8": "Raydium",
-  "MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD": "Marinade",
-  "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX": "Serum",
-  "M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K": "Magic Eden",
-  "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s": "Metadata Program",
-};
-
-const ClusterGraph: React.FC<ClusterGraphProps> = ({ 
-  cluster, 
+const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
   className = "",
-  showDepthLegend = true // Default to showing the legend
+  cluster,
+  showLabels = true,
+  highlightSuspicious = true,
+  nodeDepths = {},
+  originAddress = "",
+  selectedDepth = 1
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
-  const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [tooltip, setTooltip] = useState({
     visible: false,
     content: '',
@@ -59,233 +36,64 @@ const ClusterGraph: React.FC<ClusterGraphProps> = ({
     y: 0
   });
 
-  // Convert cluster data to graph data format
-  useEffect(() => {
-    if (!cluster) return;
-
-    const nodes: Node[] = [];
-    const links: Link[] = [];
-    const nodeMap = new Map<string, Node>();
-    
-    // Helper to get a color for the node group
-    const getGroupForAccount = (account: string, isProgram: boolean) => {
-      if (isProgram) return 3; // Programs
-      
-      // Use a deterministic but varied approach for regular accounts
-      const sum = account.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
-      return (sum % 3) + 1; // Groups 1-3 for accounts
-    };
-
-    // Add nodes for all accounts in the cluster
-    cluster.accounts.forEach((account: string) => {
-      // Check if it's a program
-      const isProgram = cluster.programs.includes(account);
-      
-      const node = {
-        id: account,
-        group: getGroupForAccount(account, isProgram),
-        type: isProgram ? 'program' : 'account',
-        label: isProgram ? getProgramLabel(account) : '',
-        volume: isProgram ? 3 : 1,
-        isProgram
-      };
-      nodes.push(node);
-      nodeMap.set(account, node);
-    });
-
-    // Make sure all programs are included too
-    cluster.programs.forEach((program: string) => {
-      if (!nodeMap.has(program)) {
-        const node = {
-          id: program,
-          group: 3,
-          type: 'program',
-          label: getProgramLabel(program),
-          volume: 2,
-          isProgram: true
-        };
-        nodes.push(node);
-        nodeMap.set(program, node);
-      }
-    });
-
-    // Create links between accounts to build the full graph structure
-    // For each account, connect to other accounts it frequently interacts with
-    const accountConnections = buildAccountConnections(cluster);
-    
-    // Add the links
-    for (const [source, targets] of accountConnections) {
-      for (const [target, strength] of targets) {
-        // Ensure both nodes exist
-        if (!nodeMap.has(source) || !nodeMap.has(target)) continue;
-        
-        links.push({
-          source,
-          target,
-          value: strength,
-          type: nodeMap.get(target)?.isProgram ? 'program' : 'transfer'
-        });
-      }
-    }
-
-    setGraphData({ nodes, links });
-  }, [cluster]);
-
-  // Helper to build connections between accounts based on cluster data
-  const buildAccountConnections = (cluster: TransactionCluster) => {
-    const connections = new Map<string, Map<string, number>>();
-    
-    // Initialize for all accounts
-    cluster.accounts.forEach(account => {
-      connections.set(account, new Map());
-    });
-    
-    // Connect accounts that interact with the same programs
-    cluster.programs.forEach(program => {
-      // We'll assume all accounts in the cluster interact with all programs
-      // In a real implementation, you'd analyze the actual transaction data
-      
-      cluster.accounts.forEach(account => {
-        // Skip if the account is the program itself
-        if (account === program) return;
-        
-        // Connect account to program
-        const accountMap = connections.get(account)!;
-        accountMap.set(program, (accountMap.get(program) || 0) + 1);
-        
-        // For programs, connect back to the account more weakly
-        const programMap = connections.get(program) || new Map();
-        programMap.set(account, (programMap.get(account) || 0) + 0.5);
-        connections.set(program, programMap);
-      });
-    });
-    
-    // Connect accounts with other accounts (simplified approach)
-    // In a real implementation, you'd analyze actual transaction flows
-    const regularAccounts = cluster.accounts.filter(a => !cluster.programs.includes(a));
-    
-    // Create connections based on cluster type
-    if (cluster.type === 'Sequential Transfers') {
-      // Create a chain of connections
-      for (let i = 0; i < regularAccounts.length - 1; i++) {
-        const source = regularAccounts[i];
-        const target = regularAccounts[i + 1];
-        
-        const sourceMap = connections.get(source)!;
-        sourceMap.set(target, (sourceMap.get(target) || 0) + 2);
-        
-        const targetMap = connections.get(target)!;
-        targetMap.set(source, (targetMap.get(source) || 0) + 0.5);
-      }
-    } else if (cluster.type === 'Fan-out') {
-      // One account connects to many
-      if (regularAccounts.length > 0) {
-        const source = regularAccounts[0];
-        const sourceMap = connections.get(source)!;
-        
-        for (let i = 1; i < regularAccounts.length; i++) {
-          const target = regularAccounts[i];
-          sourceMap.set(target, (sourceMap.get(target) || 0) + 1.5);
-          
-          const targetMap = connections.get(target)!;
-          targetMap.set(source, (targetMap.get(source) || 0) + 0.5);
-        }
-      }
-    } else if (cluster.type === 'Fan-in') {
-      // Many accounts connect to one
-      if (regularAccounts.length > 0) {
-        const target = regularAccounts[0];
-        const targetMap = connections.get(target)!;
-        
-        for (let i = 1; i < regularAccounts.length; i++) {
-          const source = regularAccounts[i];
-          const sourceMap = connections.get(source)!;
-          
-          sourceMap.set(target, (sourceMap.get(target) || 0) + 1.5);
-          targetMap.set(source, (targetMap.get(source) || 0) + 0.5);
-        }
-      }
-    } else {
-      // Default - connect accounts in a more mesh-like pattern
-      for (let i = 0; i < regularAccounts.length; i++) {
-        const source = regularAccounts[i];
-        const sourceMap = connections.get(source)!;
-        
-        for (let j = i + 1; j < regularAccounts.length; j++) {
-          // Only connect some accounts randomly
-          if (Math.random() > 0.7) continue;
-          
-          const target = regularAccounts[j];
-          sourceMap.set(target, (sourceMap.get(target) || 0) + 1);
-          
-          const targetMap = connections.get(target)!;
-          targetMap.set(source, (targetMap.get(source) || 0) + 1);
-        }
-      }
-    }
-    
-    return connections;
+  // Known program mappings for better labeling
+  const KNOWN_PROGRAMS: Record<string, string> = {
+    "11111111111111111111111111111111": "System Program",
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA": "Token Program",
+    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL": "Assoc. Token Program",
+    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4": "Jupiter DEX",
+    // Add more known programs as needed
   };
 
-  // Get label for known programs
-  function getProgramLabel(programId: string): string {
-    // Check for exact matches
-    if (PROGRAM_LABELS[programId]) {
-      return PROGRAM_LABELS[programId];
-    }
-
-    // Check for partial matches
-    for (const [key, value] of Object.entries(PROGRAM_LABELS)) {
-      if (programId.startsWith(key.substring(0, 8))) {
-        return value;
-      }
-    }
-
-    return formatAddress(programId, 4);
-  }
-
-  // Get node depth from the cluster's depthMap 
-  const getNodeDepth = (id: string): number => {
-    if (cluster.depthMap && cluster.depthMap[id] !== undefined) {
-      return cluster.depthMap[id];
-    }
-    // Default to depth 0 if not found
-    return 0;
-  };
-
-  // D3 visualization
   useEffect(() => {
-    if (!svgRef.current || !graphData) return;
+    if (!svgRef.current || !cluster) return;
 
-    // Clear previous visualization
+    // Clear any existing SVG content
     d3.select(svgRef.current).selectAll("*").remove();
 
-    const width = svgRef.current.clientWidth || 600;
-    const height = 400;
+    const width = svgRef.current.clientWidth || 800;
+    const height = 600;
 
     // Create SVG
     const svg = d3.select(svgRef.current)
       .attr("viewBox", [0, 0, width, height])
       .attr("class", "bg-card");
 
-    // Add a border to the SVG
-    svg.append("rect")
-      .attr("width", width)
-      .attr("height", height)
-      .attr("stroke", "none")
-      .attr("fill", "none");
-
-    // Enable zoom and pan
-    const g = svg.append("g");
-    svg.call(
-      d3.zoom()
-        .extent([[0, 0], [width, height]])
-        .scaleExtent([0.1, 8])
-        .on("zoom", (event) => g.attr("transform", event.transform))
-    );
-
-    // Define marker for arrows
-    svg.append("defs").append("marker")
+    // Define defs for markers and animations
+    const defs = svg.append("defs");
+    
+    // Add gradient definitions for visual enhancements
+    const addRadialGradient = (id: string, color1: string, color2: string) => {
+      const gradient = defs.append("radialGradient")
+        .attr("id", id)
+        .attr("cx", "50%")
+        .attr("cy", "50%")
+        .attr("r", "50%")
+        .attr("fx", "50%")
+        .attr("fy", "50%");
+        
+      gradient.append("stop")
+        .attr("offset", "0%")
+        .attr("stop-color", color1);
+        
+      gradient.append("stop")
+        .attr("offset", "100%")
+        .attr("stop-color", color2);
+    };
+    
+    // Add gradients for different node types and depths
+    addRadialGradient("program-gradient", "#00C2FF", "#0047BA");
+    addRadialGradient("wallet-gradient", "#9945FF", "#6C2DC7");
+    addRadialGradient("origin-gradient", "#FF9500", "#FF5C00");
+    addRadialGradient("depth-1-gradient", "#14F195", "#0BC878");
+    addRadialGradient("depth-2-gradient", "#9945FF", "#6C2DC7");
+    addRadialGradient("depth-3-gradient", "#00C2FF", "#0047BA");
+    addRadialGradient("depth-4-gradient", "#FFD700", "#FFA500");
+    addRadialGradient("depth-5-gradient", "#FF4500", "#8B0000");
+    addRadialGradient("suspicious-gradient", "#FF4500", "#8B0000");
+    
+    // Marker for arrows
+    defs.append("marker")
       .attr("id", "arrow")
       .attr("viewBox", "0 -5 10 10")
       .attr("refX", 20)
@@ -296,230 +104,552 @@ const ClusterGraph: React.FC<ClusterGraphProps> = ({
       .append("path")
       .attr("d", "M0,-5L10,0L0,5")
       .attr("class", "text-muted-foreground fill-current");
-
-    // Calculate max depth for color scaling
-    let maxDepth = 0;
-    if (cluster.depthMap) {
-      maxDepth = Math.max(...Object.values(cluster.depthMap));
-    }
-
-    // Get node opacity based on depth
-    const getNodeOpacity = (d: any): number => {
-      if (d.isProgram) return 1; // Programs always fully visible
       
-      const depth = getNodeDepth(d.id);
-      return 1 - (depth * 0.15); // Decrease opacity with depth
-    };
+    // Marker for suspicious transactions
+    defs.append("marker")
+      .attr("id", "arrow-suspicious")
+      .attr("viewBox", "0 -5 10 10")
+      .attr("refX", 20)
+      .attr("refY", 0)
+      .attr("markerWidth", 6)
+      .attr("markerHeight", 6)
+      .attr("orient", "auto")
+      .append("path")
+      .attr("d", "M0,-5L10,0L0,5")
+      .attr("fill", "#FF4500");
 
-    // Get node size based on depth and type
-    const getNodeSize = (d: any): number => {
-      if (d.isProgram) return 15; // Programs keep their size
+    // Enable zoom and pan
+    const g = svg.append("g");
+    svg.call(
+      d3.zoom()
+        .extent([[0, 0], [width, height]])
+        .scaleExtent([0.1, 8])
+        .on("zoom", (event) => g.attr("transform", event.transform)) as any
+    );
+
+    // Process data to create nodes and links
+    const nodes: any[] = [];
+    const links: any[] = [];
+    
+    // Create nodes for all accounts in the cluster
+    cluster.accounts.forEach(account => {
+      const isProgram = cluster.programs.includes(account);
+      const depth = nodeDepths[account] !== undefined ? nodeDepths[account] : 999;
+      const isOrigin = account === originAddress || (originAddress && account.startsWith(originAddress.substring(0, 8)));
       
-      const depth = getNodeDepth(d.id);
-      return Math.max(4, 12 - (depth * 2)); // Larger nodes for lower depths
+      // Determine label
+      let label = '';
+      if (isProgram) {
+        // Try to identify known programs
+        for (const [id, name] of Object.entries(KNOWN_PROGRAMS)) {
+          if (account.startsWith(id.substring(0, 8))) {
+            label = name;
+            break;
+          }
+        }
+        if (!label) label = 'Program';
+      }
+      
+      nodes.push({
+        id: account,
+        label: label || (isOrigin ? 'Origin' : ''),
+        isProgram,
+        depth,
+        isOrigin,
+        // Random value for simulation purposes - in a real app, this would be based on transaction count
+        volume: isOrigin ? 3 : isProgram ? 2 : 1,
+        // Simulated risk score - in a real app, this would be based on actual risk assessment
+        risk: Math.random() > 0.8 ? Math.floor(Math.random() * 100) : 0
+      });
+    });
+    
+    // Create links between nodes based on transaction patterns
+    // In a real implementation, this would analyze actual transaction data
+    // For demo purposes, we'll create simulated connections
+    
+    // Create connections based on cluster type and depth
+    const createConnections = () => {
+      const accountsByDepth: Record<number, string[]> = {};
+      
+      // Group accounts by depth
+      nodes.forEach(node => {
+        const depth = node.depth;
+        if (!accountsByDepth[depth]) accountsByDepth[depth] = [];
+        accountsByDepth[depth].push(node.id);
+      });
+      
+      const availableDepths = Object.keys(accountsByDepth).map(Number).sort();
+      
+      // Create connections between adjacent depth levels
+      for (let i = 0; i < availableDepths.length - 1; i++) {
+        const currentDepth = availableDepths[i];
+        const nextDepth = availableDepths[i + 1];
+        
+        const currentAccounts = accountsByDepth[currentDepth];
+        const nextAccounts = accountsByDepth[nextDepth];
+        
+        if (currentAccounts && nextAccounts) {
+          currentAccounts.forEach(source => {
+            // Connect to a random subset of accounts at the next depth
+            const numConnections = Math.min(
+              nextAccounts.length,
+              Math.floor(Math.random() * 3) + 1
+            );
+            
+            const targets = nextAccounts
+              .sort(() => 0.5 - Math.random())
+              .slice(0, numConnections);
+            
+            targets.forEach(target => {
+              links.push({
+                source,
+                target,
+                value: 1 + Math.random(),
+                isSuspicious: Math.random() > 0.85
+              });
+            });
+          });
+        }
+      }
+      
+      // Add some connections between nodes at the same depth for more realistic networks
+      availableDepths.forEach(depth => {
+        const accountsAtDepth = accountsByDepth[depth];
+        if (accountsAtDepth && accountsAtDepth.length > 1) {
+          const numIntraConnections = Math.min(
+            accountsAtDepth.length,
+            Math.floor(accountsAtDepth.length * 0.3)
+          );
+          
+          for (let i = 0; i < numIntraConnections; i++) {
+            const sourceIdx = Math.floor(Math.random() * accountsAtDepth.length);
+            let targetIdx;
+            do {
+              targetIdx = Math.floor(Math.random() * accountsAtDepth.length);
+            } while (targetIdx === sourceIdx);
+            
+            links.push({
+              source: accountsAtDepth[sourceIdx],
+              target: accountsAtDepth[targetIdx],
+              value: 0.8 + Math.random() * 0.5,
+              isSuspicious: Math.random() > 0.9
+            });
+          }
+        }
+      });
+      
+      // Ensure programs are connected to accounts
+      const programs = nodes.filter(n => n.isProgram).map(n => n.id);
+      programs.forEach(program => {
+        // Connect program to a few random accounts
+        const nonProgramAccounts = nodes
+          .filter(n => !n.isProgram && n.id !== program)
+          .map(n => n.id);
+        
+        const numAccountsToConnect = Math.min(
+          nonProgramAccounts.length,
+          Math.floor(Math.random() * 5) + 1
+        );
+        
+        const accountsToConnect = nonProgramAccounts
+          .sort(() => 0.5 - Math.random())
+          .slice(0, numAccountsToConnect);
+        
+        accountsToConnect.forEach(account => {
+          links.push({
+            source: program,
+            target: account,
+            value: 1.2,
+            isProgram: true,
+            isSuspicious: false
+          });
+        });
+      });
     };
+    
+    createConnections();
 
-    // Create force simulation with parameters adjusted for depth
-    const simulation = d3.forceSimulation(graphData.nodes)
-      .force("link", d3.forceLink(graphData.links)
+    // Create force simulation with custom parameters
+    const simulation = d3.forceSimulation(nodes)
+      .force("link", d3.forceLink(links)
         .id(d => (d as any).id)
         .distance(d => {
-          // Program links should be shorter
-          if ((d as any).type === 'program') return 80;
+          // Programs have longer link distances
+          if ((d.source as any).isProgram || (d.target as any).isProgram) return 120;
           
-          // Distance increases with depth
-          const sourceDepth = getNodeDepth((d.source as any).id);
-          const targetDepth = getNodeDepth((d.target as any).id);
-          const maxLinkDepth = Math.max(sourceDepth, targetDepth);
-          
-          return 100 + (maxLinkDepth * 30); // Longer distance for higher depth links
+          // Distance scales with depth difference
+          const depthDiff = Math.abs((d.source as any).depth - (d.target as any).depth);
+          return 70 + depthDiff * 15;
         })
         .strength(d => {
-          // Program links should be stronger
-          if ((d as any).type === 'program') return 0.8;
+          // Programs have weaker connections (pulled less toward other nodes)
+          if ((d.source as any).isProgram || (d.target as any).isProgram) return 0.3;
           
-          // Connection strength decreases with depth
-          const sourceDepth = getNodeDepth((d.source as any).id);
-          const targetDepth = getNodeDepth((d.target as any).id);
-          const maxLinkDepth = Math.max(sourceDepth, targetDepth);
+          // Stronger connections between nodes of the same depth
+          if ((d.source as any).depth === (d.target as any).depth) return 0.8;
           
-          return Math.max(0.1, 0.5 - (maxLinkDepth * 0.1)); // Weaker links for higher depths
+          return 0.5;
         }))
-      .force("charge", d3.forceManyBody()
-        .strength(d => {
-          // Programs repel more strongly
-          if ((d as any).isProgram) return -400;
-          
-          // Repulsion decreases with depth
-          const depth = getNodeDepth((d as any).id);
-          return -200 + (depth * 50); // Less repulsion for higher depths
-        }))
+      .force("charge", d3.forceManyBody().strength(d => {
+        // Origin node has stronger repulsion
+        if ((d as any).isOrigin) return -600;
+        
+        // Programs repel more to create space around them
+        if ((d as any).isProgram) return -400;
+        
+        // Repulsion decreases with depth
+        const depth = (d as any).depth || 1;
+        return -300 / Math.max(1, Math.log(depth + 1));
+      }))
       .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("x", d3.forceX()
-        .strength(d => {
-          const depth = getNodeDepth((d as any).id);
-          return (d as any).isProgram ? 0.1 : 0.05 - (depth * 0.01);
-        }))
-      .force("y", d3.forceY()
-        .strength(d => {
-          const depth = getNodeDepth((d as any).id);
-          return (d as any).isProgram ? 0.1 : 0.05 - (depth * 0.01);
-        }))
-      .force("collision", d3.forceCollide()
-        .radius(d => {
-          const depth = getNodeDepth((d as any).id);
-          return ((d as any).isProgram ? 40 : 20) - (depth * 3);
-        })
-        .strength(0.7));
+      .force("x", d3.forceX(width / 2).strength(d => {
+        // Origin at center
+        if ((d as any).isOrigin) return 0.2;
+        
+        // Lower depths clustered closer to center
+        const depth = Math.min((d as any).depth || 1, 5);
+        return 0.02 * depth;
+      }))
+      .force("y", d3.forceY(height / 2).strength(d => {
+        if ((d as any).isOrigin) return 0.2;
+        const depth = Math.min((d as any).depth || 1, 5);
+        return 0.02 * depth;
+      }))
+      .force("collision", d3.forceCollide().radius(d => {
+        const baseRadius = (d as any).isOrigin 
+          ? 25 
+          : (d as any).isProgram 
+            ? 20 
+            : 15;
+            
+        return baseRadius * (1 + (d as any).volume * 0.2);
+      }).strength(0.8));
 
-    // Draw links with opacity based on depth
+    // Draw links with curved paths and visual enhancements
     const link = g.append("g")
       .selectAll("path")
-      .data(graphData.links)
+      .data(links)
       .join("path")
-      .attr("class", d => {
-        const sourceDepth = getNodeDepth((d.source as any).id);
-        const targetDepth = getNodeDepth((d.target as any).id);
-        const maxLinkDepth = Math.max(sourceDepth, targetDepth);
+      .attr("stroke", d => {
+        if (d.isSuspicious && highlightSuspicious) return "#FF4500";
         
-        // Different styling based on depth and type
-        const opacityValue = Math.max(20, 60 - (maxLinkDepth * 15));
+        // Color by depth difference
+        const sourceDepth = nodes.find(n => n.id === d.source)?.depth || 0;
+        const targetDepth = nodes.find(n => n.id === d.target)?.depth || 0;
         
-        if (d.type === 'program') {
-          return `stroke-current text-amber-500 opacity-${opacityValue / 100}`;
-        } else {
-          return `stroke-current text-muted-foreground opacity-${opacityValue / 100}`;
-        }
+        if (sourceDepth === 0 || targetDepth === 0) return "#FF9500"; // Origin connections
+        
+        const depthColors = [
+          "#14F195", // Depth 1 - green
+          "#9945FF", // Depth 2 - purple
+          "#00C2FF", // Depth 3 - blue
+          "#FFD700", // Depth 4 - gold
+          "#FF4500"  // Depth 5+ - red
+        ];
+        
+        const lowerDepth = Math.min(sourceDepth, targetDepth);
+        const colorIndex = Math.min(lowerDepth - 1, depthColors.length - 1);
+        
+        return depthColors[Math.max(0, colorIndex)];
+      })
+      .attr("stroke-opacity", d => {
+        // Higher opacity for connections closer to origin
+        const sourceDepth = nodes.find(n => n.id === d.source)?.depth || 0;
+        const targetDepth = nodes.find(n => n.id === d.target)?.depth || 0;
+        const minDepth = Math.min(sourceDepth, targetDepth);
+        
+        if (d.isSuspicious && highlightSuspicious) return 0.8;
+        
+        return Math.max(0.2, 0.7 - (minDepth * 0.1));
       })
       .attr("stroke-width", d => {
-        const sourceDepth = getNodeDepth((d.source as any).id);
-        const targetDepth = getNodeDepth((d.target as any).id);
-        const maxLinkDepth = Math.max(sourceDepth, targetDepth);
+        // Thicker lines for connections closer to origin
+        const sourceDepth = nodes.find(n => n.id === d.source)?.depth || 0;
+        const targetDepth = nodes.find(n => n.id === d.target)?.depth || 0;
+        const minDepth = Math.min(sourceDepth, targetDepth);
         
-        // Thinner lines for higher depths
-        return Math.max(0.5, Math.sqrt(d.value) * (1.5 - (maxLinkDepth * 0.25)));
+        const baseWidth = d.value || 1;
+        const depthFactor = Math.max(0.5, 1.5 - (minDepth * 0.2));
+        
+        return baseWidth * depthFactor;
       })
-      .attr("marker-end", d => d.type !== 'program' ? "url(#arrow)" : null);
+      .attr("fill", "none")
+      .attr("stroke-dasharray", d => d.isProgram ? "5,5" : "none")
+      .attr("marker-end", d => 
+        (d.isSuspicious && highlightSuspicious) ? "url(#arrow-suspicious)" : "url(#arrow)"
+      )
+      .on("mouseover", handleLinkMouseOver)
+      .on("mousemove", handleMouseMove)
+      .on("mouseout", handleMouseOut);
 
-    // Draw nodes
+    // Draw nodes with depth-based styling
     const node = g.append("g")
       .selectAll("g")
-      .data(graphData.nodes)
+      .data(nodes)
       .join("g")
-      .call(drag(simulation))
-      .on("mouseover", handleNodeMouseover)
-      .on("mousemove", handleNodeMousemove)
-      .on("mouseout", handleNodeMouseout);
+      .attr("class", "cursor-pointer")
+      .on("mouseover", handleNodeMouseOver)
+      .on("mousemove", handleMouseMove)
+      .on("mouseout", handleMouseOut)
+      .call(drag(simulation) as any);
 
-    // Node circles with different styling based on type and depth
+    // Node circles with enhanced styling based on depth
     node.append("circle")
-      .attr("r", d => getNodeSize(d))
-      .attr("class", d => {
-        if ((d as any).isProgram) {
-          return "fill-amber-500 stroke-amber-300 stroke-2";
-        }
+      .attr("r", d => {
+        if (d.isOrigin) return 15;
+        if (d.isProgram) return 12;
         
-        // Get depth for this node
-        const depth = getNodeDepth((d as any).id);
+        // Size decreases slightly with depth
+        const depth = d.depth || 1;
+        const sizeFactor = Math.max(0.7, 1.1 - (depth * 0.05));
         
-        // For depth 0 (starting point), use special color
-        if (depth === 0) {
-          return "fill-solana-purple stroke-white stroke-2";
-        }
+        return 10 * sizeFactor;
+      })
+      .attr("fill", d => {
+        // Origin node
+        if (d.isOrigin) return "url(#origin-gradient)";
         
-        // For depth 1, use slightly different color
-        if (depth === 1) {
-          return "fill-solana-blue stroke-white stroke-1";
-        }
+        // Program node
+        if (d.isProgram) return "url(#program-gradient)";
         
-        // For depth 2+
-        return "fill-solana-green stroke-white stroke-1 opacity-90";
+        // Suspicious node
+        if (d.risk > 60 && highlightSuspicious) return "url(#suspicious-gradient)";
+        
+        // Color by depth
+        const depthGradients = [
+          "url(#depth-1-gradient)",
+          "url(#depth-2-gradient)",
+          "url(#depth-3-gradient)",
+          "url(#depth-4-gradient)",
+          "url(#depth-5-gradient)"
+        ];
+        
+        const gradientIndex = Math.min(d.depth - 1, depthGradients.length - 1);
+        
+        return depthGradients[Math.max(0, gradientIndex)];
+      })
+      .attr("stroke", d => {
+        if (d.isOrigin) return "#FF9500";
+        if (d.risk > 60 && highlightSuspicious) return "#FF4500";
+        return "#ffffff";
+      })
+      .attr("stroke-width", d => {
+        if (d.isOrigin) return 3;
+        if (d.risk > 60 && highlightSuspicious) return 2;
+        return 1;
+      })
+      .attr("stroke-opacity", d => {
+        // Lower opacity for nodes beyond selected depth
+        if (d.depth > selectedDepth) return 0.3;
+        return 0.8;
+      })
+      .attr("fill-opacity", d => {
+        // Lower opacity for nodes beyond selected depth
+        if (d.depth > selectedDepth) return 0.3;
+        return 1;
       });
 
-    // Add concentric circles to indicate depth
-    node.filter(d => {
-      const depth = getNodeDepth((d as any).id);
-      return depth === 0; // Only add to depth 0 nodes (starting points)
-    })
-    .append("circle")
-    .attr("r", 16)
-    .attr("class", "fill-none stroke-solana-purple stroke-1 opacity-30");
-    
-    // Add depth indicator visually to each node
-    node.append("title")
-      .text(d => {
-        const depth = getNodeDepth((d as any).id);
-        return `Depth: ${depth} hop${depth !== 1 ? 's' : ''}`;
-      });
+    // Add glow effect for important nodes
+    node.filter(d => d.isOrigin || d.risk > 60 || d.depth === 1)
+      .append("circle")
+      .attr("r", d => {
+        if (d.isOrigin) return 20;
+        if (d.risk > 60) return 15;
+        if (d.depth === 1) return 15;
+        return 14;
+      })
+      .attr("fill", "none")
+      .attr("stroke", d => {
+        if (d.isOrigin) return "#FF9500";
+        if (d.risk > 60) return "#FF4500";
+        if (d.depth === 1) return "#14F195";
+        return "#ffffff";
+      })
+      .attr("stroke-width", 1)
+      .attr("stroke-opacity", 0.3);
 
-    // Add icons or symbols inside circles
-    node.filter(d => (d as any).isProgram)
-      .append("text")
+    // Add depth indicators
+    node.append("text")
       .attr("text-anchor", "middle")
       .attr("dominant-baseline", "central")
       .attr("fill", "white")
-      .style("font-size", "10px")
-      .text("P");
-
-    // Add labels for program nodes
-    node.filter(d => (d as any).isProgram)
-      .append("text")
-      .attr("dx", 20)
-      .attr("dy", "0.35em")
-      .text(d => (d as any).label)
-      .attr("class", "fill-current text-foreground text-xs font-medium");
-
-    // Mouse event handlers for tooltip
-    function handleNodeMouseover(event: any, d: any) {
-      const depth = getNodeDepth(d.id);
-      const depthInfo = `<div class="text-xs ${depth === 0 ? "text-solana-purple" : "text-muted-foreground"}">Depth: ${depth} hop${depth !== 1 ? 's' : ''}</div>`;
-      
-      const content = d.isProgram
-        ? `<div class="font-medium">${d.label}</div><div class="text-xs text-muted-foreground">Program</div>${depthInfo}`
-        : `<div class="font-medium">${formatAddress(d.id, 8)}</div><div class="text-xs text-muted-foreground">Wallet</div>${depthInfo}`;
-        
-      setTooltip({
-        visible: true,
-        content,
-        x: event.layerX,
-        y: event.layerY
+      .style("font-size", d => d.isOrigin ? "10px" : "8px")
+      .style("font-weight", "bold")
+      .text(d => {
+        if (d.isOrigin) return "O";
+        if (d.isProgram) return "P";
+        return d.depth;
       });
-    }
-    
-    function handleNodeMousemove(event: any) {
-      setTooltip(prev => ({
-        ...prev,
-        x: event.layerX,
-        y: event.layerY
-      }));
-    }
-    
-    function handleNodeMouseout() {
-      setTooltip(prev => ({
-        ...prev,
-        visible: false
-      }));
+
+    // Add labels for nodes if enabled
+    if (showLabels) {
+      node.filter(d => d.label || d.isOrigin || d.depth <= 2 || d.isProgram)
+        .append("text")
+        .attr("dx", d => {
+          const baseSize = d.isOrigin ? 15 : d.isProgram ? 12 : 10;
+          return baseSize + 5;
+        })
+        .attr("dy", "0.35em")
+        .text(d => {
+          if (d.label) return d.label;
+          if (d.isOrigin) return "Origin";
+          if (d.isProgram) return "Program";
+          return formatAddress(d.id, 6);
+        })
+        .attr("class", d => {
+          if (d.depth > selectedDepth) {
+            return "fill-current text-muted-foreground text-xs opacity-30";
+          }
+          return "fill-current text-foreground text-xs font-medium";
+        });
     }
 
-    // Update the positions each tick
+    // Update positions on each tick
     simulation.on("tick", () => {
-      // Update links - create curved paths
+      // Update link paths - create curved paths
       link.attr("d", d => {
-        const dx = (d.target as any).x - (d.source as any).x;
-        const dy = (d.target as any).y - (d.source as any).y;
+        const source = d.source;
+        const target = d.target;
+        
+        const dx = target.x - source.x;
+        const dy = target.y - source.y;
         const dr = Math.sqrt(dx * dx + dy * dy);
         
-        // Make program links straight, others curved
-        if (d.type === 'program') {
-          return `M${(d.source as any).x},${(d.source as any).y}L${(d.target as any).x},${(d.target as any).y}`;
-        } else {
-          return `M${(d.source as any).x},${(d.source as any).y}A${dr},${dr} 0 0,1 ${(d.target as any).x},${(d.target as any).y}`;
-        }
+        // Create a nice curved path
+        return `M${source.x},${source.y}A${dr},${dr} 0 0,1 ${target.x},${target.y}`;
       });
 
       // Update node positions
-      node.attr("transform", d => `translate(${(d as any).x},${(d as any).y})`);
+      node.attr("transform", d => `translate(${d.x},${d.y})`);
     });
+
+    // Tooltip event handlers
+    function handleNodeMouseOver(event: any, d: any) {
+      // Build rich HTML tooltip content
+      const depthLabel = d.isOrigin ? "Origin" : `Depth ${d.depth}`;
+      const riskHtml = d.risk > 60 
+        ? '<div class="text-red-500 font-medium mt-1">High Risk Account</div>' 
+        : '';
+      
+      const htmlContent = `
+        <div class="font-bold text-sm">${d.isProgram ? 'PROGRAM' : 'ACCOUNT'}</div>
+        <div class="mt-1">
+          <div class="font-medium">${d.label || formatAddress(d.id, 8)}</div>
+          <div class="text-xs text-muted-foreground">${depthLabel}</div>
+          ${riskHtml}
+        </div>
+        <div class="mt-2 text-xs text-muted-foreground">
+          ${d.depth > selectedDepth ? `<div class="text-amber-500">Beyond selected depth (${selectedDepth})</div>` : ''}
+          ${formatAddress(d.id, 12)}
+        </div>
+      `;
+      
+      setTooltip({
+        visible: true,
+        content: htmlContent,
+        x: event.layerX,
+        y: event.layerY
+      });
+    }
+    
+    function handleLinkMouseOver(event: any, d: any) {
+      const source = typeof d.source === 'string' ? d.source : d.source.id;
+      const target = typeof d.target === 'string' ? d.target : d.target.id;
+      
+      const sourceNode = nodes.find(n => n.id === source);
+      const targetNode = nodes.find(n => n.id === target);
+      
+      if (!sourceNode || !targetNode) return;
+      
+      const sourceName = sourceNode.label || formatAddress(source, 6);
+      const targetName = targetNode.label || formatAddress(target, 6);
+
+      const timestamp = d.timestamp ? 
+        `<div class="text-xs">Time: ${new Date(d.timestamp).toLocaleString()}</div>` : '';
+      
+      // Build tooltip content
+      const htmlContent = `
+        <div class="font-bold text-sm">
+          ${d.isSuspicious ? '⚠️ SUSPICIOUS FLOW' : 'TRANSACTION FLOW'}
+        </div>
+        <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+          <div>From:</div>
+          <div class="font-medium">${sourceName}</div>
+          <div>Depth:</div>
+          <div class="font-medium">${sourceNode.depth}</div>
+          <div>To:</div>
+          <div class="font-medium">${targetName}</div>
+          <div>Depth:</div>
+          <div class="font-medium">${targetNode.depth}</div>
+           <div>Token:</div>
+          <div class="font-medium">${d.tokenType || 'Unknown'}</div>
+          <div>Amount:</div>
+          <div class="font-medium">${d.amount?.toFixed(4) || '?'} ${d.tokenType || ''}</div>
+          ${d.isCpi ? '<div>Type:</div><div class="text-amber-400">Cross-Program Invocation</div>' : ''}
+        </div>
+        <div class="mt-2 text-xs text-muted-foreground">
+          ${timestamp}
+          ${d.programId ? `<div>Program: ${formatAddress(d.programId, 8)}</div>` : ''}
+          ${d.isFlagged ? '<div class="text-red-400 mt-1">⚠️ This transaction exhibits suspicious patterns</div>' : ''}
+        </div>
+        ${d.isSuspicious 
+          ? '<div class="text-xs text-red-500 mt-2">⚠️ This flow shows suspicious pattern</div>' 
+          : ''}
+      `;
+      
+      setTooltip({
+        visible: true,
+        content: htmlContent,
+        x: event.layerX,
+        y: event.layerY
+      });
+      
+      // Highlight the connection
+      d3.select(event.target)
+        .transition()
+        .duration(200)
+        .attr("stroke-width", (d.value || 1) * 2)
+        .attr("stroke-opacity", 0.8);
+    }
+    
+    function handleMouseMove(event: any) {
+      setTooltip(prev => ({
+        ...prev,
+        x: event.layerX,
+        y: event.layerY
+      }));
+    }
+    
+    function handleMouseOut(event: any, d: any) {
+      setTooltip(prev => ({ ...prev, visible: false }));
+      
+      // Reset any highlighting
+      if (event.target.tagName === 'path') {
+        const sourceNode = typeof d.source === 'string' ? 
+          nodes.find(n => n.id === d.source) : d.source;
+        const targetNode = typeof d.target === 'string' ? 
+          nodes.find(n => n.id === d.target) : d.target;
+          
+        if (!sourceNode || !targetNode) return;
+          
+        const sourceDepth = sourceNode.depth || 0;
+        const targetDepth = targetNode.depth || 0;
+        const minDepth = Math.min(sourceDepth, targetDepth);
+        
+        d3.select(event.target)
+          .transition()
+          .duration(200)
+          .attr("stroke-width", () => {
+            const baseWidth = d.value || 1;
+            const depthFactor = Math.max(0.5, 1.5 - (minDepth * 0.2));
+            return baseWidth * depthFactor;
+          })
+          .attr("stroke-opacity", () => {
+            if (d.isSuspicious && highlightSuspicious) return 0.8;
+            return Math.max(0.2, 0.7 - (minDepth * 0.1));
+          });
+      }
+    }
 
     // Drag functions
     function drag(simulation) {
@@ -549,15 +679,7 @@ const ClusterGraph: React.FC<ClusterGraphProps> = ({
     return () => {
       simulation.stop();
     };
-  }, [graphData, cluster]);
-
-  if (!cluster) {
-    return (
-      <div className={`${className} flex items-center justify-center bg-card`}>
-        <span className="text-muted-foreground">Select a cluster to visualize</span>
-      </div>
-    );
-  }
+  }, [cluster, showLabels, highlightSuspicious, nodeDepths, originAddress, selectedDepth]);
 
   return (
     <div className={`${className} relative`}>
@@ -565,40 +687,54 @@ const ClusterGraph: React.FC<ClusterGraphProps> = ({
       
       {tooltip.visible && (
         <div 
-          className="absolute p-2 bg-black/80 text-white rounded-md shadow-lg text-sm z-50"
+          className="absolute z-50 p-3 bg-card border border-border rounded-md shadow-lg text-sm"
           style={{
-            left: `${tooltip.x + 10}px`,
-            top: `${tooltip.y + 10}px`,
-            transform: 'translate(-50%, -100%)',
-            pointerEvents: 'none'
+            left: `${tooltip.x + 15}px`,
+            top: `${tooltip.y}px`,
+            maxWidth: '280px',
+            pointerEvents: 'none',
+            transform: 'translate(0, -50%)'
           }}
           dangerouslySetInnerHTML={{ __html: tooltip.content }}
         />
       )}
       
-      {showDepthLegend && (
-        <div className="absolute top-2 left-2 bg-card/90 p-2 rounded-md border border-border text-xs">
-          <div className="mb-1 font-medium">Connection Depth</div>
-          <div className="flex items-center gap-1 mb-1">
-            <div className="w-3 h-3 rounded-full bg-solana-purple"></div>
-            <span>Direct (0 hops)</span>
-          </div>
-          <div className="flex items-center gap-1 mb-1">
-            <div className="w-3 h-3 rounded-full bg-solana-blue"></div>
-            <span>1 hop away</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <div className="w-3 h-3 rounded-full bg-solana-green opacity-90"></div>
-            <span>2+ hops away</span>
-          </div>
-        </div>
-      )}
+      <div className="absolute bottom-2 right-2 text-xs bg-card/80 p-2 rounded-md text-muted-foreground border border-border">
+        <div className="font-medium">{cluster.type || 'Unknown'} cluster</div>
+        <div>{cluster.accounts.length} accounts · {cluster.transactions.length} transactions</div>
+        <div className="mt-1">Showing depth: {selectedDepth}/{Math.max(...Object.values(nodeDepths) || [1])}</div>
+      </div>
       
-      <div className="absolute bottom-2 right-2 text-xs bg-card/80 p-2 rounded-md text-muted-foreground">
-        {cluster.type} cluster · {cluster.accounts.length} accounts · {cluster.transactions.length} transactions
+      {/* Legend */}
+      <div className="absolute top-2 left-2 text-xs bg-card/90 p-2 rounded-md text-muted-foreground border border-border">
+        <div className="font-medium mb-1">Depth Legend</div>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+          <div className="flex items-center">
+            <div className="w-3 h-3 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 mr-1"></div>
+            <span>Origin</span>
+          </div>
+          <div className="flex items-center">
+            <div className="w-3 h-3 rounded-full bg-gradient-to-br from-green-400 to-green-600 mr-1"></div>
+            <span>Depth 1</span>
+          </div>
+          <div className="flex items-center">
+            <div className="w-3 h-3 rounded-full bg-gradient-to-br from-solana-purple to-purple-700 mr-1"></div>
+            <span>Depth 2</span>
+          </div>
+          <div className="flex items-center">
+            <div className="w-3 h-3 rounded-full bg-gradient-to-br from-solana-blue to-blue-700 mr-1"></div>
+            <span>Depth 3+</span>
+          </div>
+          {highlightSuspicious && (
+            <div className="flex items-center col-span-2">
+              <div className="w-3 h-3 rounded-full bg-gradient-to-br from-red-500 to-red-700 mr-1"></div>
+              <span className="text-red-500">Suspicious Activity</span>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 };
 
-export default ClusterGraph;
+export default DepthAwareClusterGraph;
