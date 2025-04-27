@@ -1,9 +1,22 @@
-"use client"
-
 import React, { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import { formatAddress } from '@/lib/utils';
 import { TransactionCluster } from '@/lib/transactionClustering';
+import { Entity } from '@/types';
+import { entities as knownEntities } from '@/lib/data'; // Import real entity data
+
+// Constants for risk assessment - similar to those in transactionClustering.ts
+const LARGE_VALUE_THRESHOLD = 1000; // SOL
+const TRANSACTION_BURST_THRESHOLD = 20; // Number of transactions in a short time
+const TIME_WINDOW_SECONDS = 300; // 5 minutes
+
+// Suspicious program patterns to watch for
+const SUSPICIOUS_PATTERNS = [
+  'Lawr', // Example pattern for a mixer-like service
+  'Torn', // Example pattern for a privacy-oriented service
+  'Mix',  // Example pattern
+  'Wash', // Example pattern
+];
 
 interface NodeDepthMap {
   [key: string]: number;
@@ -36,13 +49,154 @@ const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
     y: 0
   });
 
-  // Known program mappings for better labeling
-  const KNOWN_PROGRAMS: Record<string, string> = {
-    "11111111111111111111111111111111": "System Program",
-    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA": "Token Program",
-    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL": "Assoc. Token Program",
-    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4": "Jupiter DEX",
-    // Add more known programs as needed
+  // Build a lookup map for known entities
+  const entityMap = React.useMemo(() => {
+    const map = new Map<string, Entity>();
+    if (knownEntities && Array.isArray(knownEntities)) {
+      knownEntities.forEach(entity => {
+        map.set(entity.address, entity);
+        
+        // Also map related addresses
+        if (entity.relatedAddresses && Array.isArray(entity.relatedAddresses)) {
+          entity.relatedAddresses.forEach(addr => {
+            if (!map.has(addr)) {
+              map.set(addr, entity);
+            }
+          });
+        }
+      });
+    }
+    return map;
+  }, []);
+
+  // Build a map of known programs using the entity data
+  const KNOWN_PROGRAMS = React.useMemo(() => {
+    const programs: Record<string, string> = {
+      "11111111111111111111111111111111": "System Program",
+      "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA": "Token Program",
+      "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL": "Assoc. Token Program",
+    };
+    
+    // Add all entities of type 'contract' or 'program' to the KNOWN_PROGRAMS map
+    if (knownEntities && Array.isArray(knownEntities)) {
+      knownEntities.forEach(entity => {
+        if (entity.type === 'contract' || entity.type === 'program' || entity.type === 'defi_protocol') {
+          programs[entity.address] = entity.name || formatAddress(entity.address, 8);
+        }
+      });
+    }
+    
+    return programs;
+  }, []);
+  
+  // Utility function to format currency values in USD
+  const formatCurrency = (value: number | undefined): string => {
+    if (value === undefined || value === null) return '$0.00';
+    
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }).format(value);
+  };
+  
+  // Format token amounts with appropriate decimals based on token type
+  const formatAmount = (amount: number | undefined, symbol: string = ''): string => {
+    if (amount === undefined || amount === null) return '0';
+    
+    // Use appropriate decimal places based on token type
+    const decimals = 
+      symbol === 'SOL' ? 4 :
+      symbol === 'BTC' ? 8 :
+      symbol === 'ETH' ? 6 :
+      symbol === 'USDC' || symbol === 'USDT' ? 2 :
+      amount < 0.01 ? 8 : 4;
+    
+    const formatter = new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: decimals
+    });
+    
+    return `${formatter.format(amount)} ${symbol}`.trim();
+  };
+  
+  // Format SOL values with appropriate precision
+  const formatSol = (value: number | undefined): string => {
+    if (value === undefined || value === null) return '0 SOL';
+    
+    return new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 4
+    }).format(value) + ' SOL';
+  };
+  
+  // Convert token amount to USD value using fixed rates
+  const tokenToUsd = (amount: number, tokenType: string): number => {
+    if (tokenType === 'SOL') {
+      return amount * 150; // $150 per SOL
+    } else {
+      return amount * 1; // $1 for other tokens
+    }
+  };
+  
+  // Get color for risk level indicators
+  const getRiskColor = (score: number | undefined): string => {
+    if (!score) return 'text-gray-400';
+    if (score >= 60) return 'text-red-500';
+    if (score >= 30) return 'text-amber-500';
+    return 'text-green-500';
+  };
+  
+  // Get text label for risk level
+  const getRiskLabel = (score: number | undefined): string => {
+    if (!score) return 'Unknown';
+    if (score >= 60) return 'High Risk';
+    if (score >= 30) return 'Medium Risk';
+    return 'Low Risk';
+  };
+  
+  // Assess risk of an account based on its activity pattern
+  // Similar to the logic in transactionClustering.ts
+  const assessAccountRisk = (accountId: string, txCount: number, volume: number, depth: number): { score: number, reasons: string[] } => {
+    let score = 0;
+    const reasons: string[] = [];
+    
+    // High volume transfers are higher risk
+    if (volume > LARGE_VALUE_THRESHOLD) {
+      score += 30;
+      reasons.push(`Large value movement: ${formatSol(volume)}`);
+    }
+    
+    // Many transactions in a short time are suspicious
+    if (txCount > TRANSACTION_BURST_THRESHOLD) {
+      score += 25;
+      reasons.push(`High transaction count: ${txCount} transactions`);
+    }
+    
+    // Check if the account is known to be suspicious (uses a suspicious program)
+    const entity = entityMap.get(accountId);
+    if (entity && entity.type === 'mixer') {
+      score += 50;
+      reasons.push(`Associated with known mixer service: ${entity.name}`);
+    }
+    
+    // Nodes very far from origin (many hops away) could be suspicious laundering attempts
+    if (depth > 3) {
+      score += 10;
+      reasons.push(`Distant connection (${depth} hops from origin)`);
+    }
+    
+    // Check for known suspicious addresses
+    for (const pattern of SUSPICIOUS_PATTERNS) {
+      if (accountId.includes(pattern)) {
+        score += 35;
+        reasons.push(`Address contains suspicious pattern: ${pattern}`);
+        break;
+      }
+    }
+    
+    return { score, reasons };
   };
 
   useEffect(() => {
@@ -131,44 +285,182 @@ const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
     const nodes: any[] = [];
     const links: any[] = [];
     
+    // Create maps to track account metrics
+    const accountTxCounts = new Map<string, number>();
+    const accountVolumes = new Map<string, { inflow: number, outflow: number, usdInflow: number, usdOutflow: number }>();
+    
+    // Initialize transaction counts and volumes
+    cluster.accounts.forEach(account => {
+      accountTxCounts.set(account, 0);
+      accountVolumes.set(account, { 
+        inflow: 0, 
+        outflow: 0, 
+        usdInflow: 0, 
+        usdOutflow: 0 
+      });
+    });
+    
+    // If the cluster has transaction data, use it to calculate volumes
+    if (cluster.transactions.length > 0) {
+      // Calculate the average SOL value per transaction based on total cluster value
+      const avgTxValue = cluster.totalValue / cluster.transactions.length;
+      
+      // Distribute transactions based on depth from origin
+      cluster.accounts.forEach(account => {
+        const depth = nodeDepths[account] || 999;
+        
+        // More transactions for accounts closer to origin
+        let txCount;
+        if (depth === 0) { 
+          // Origin account gets most transactions
+          txCount = Math.ceil(cluster.transactions.length * 0.4);
+        } else if (depth === 1) {
+          // Direct connections get significant portion
+          txCount = Math.ceil(cluster.transactions.length * 0.2);
+        } else {
+          // Deeper accounts get fewer transactions
+          const depthFactor = Math.max(0.05, 0.1 - (depth * 0.02));
+          txCount = Math.max(1, Math.ceil(cluster.transactions.length * depthFactor));
+        }
+        
+        // Set transaction count
+        accountTxCounts.set(account, txCount);
+        
+        // Calculate transaction value in SOL
+        const totalSolValue = txCount * avgTxValue;
+        
+        // Calculate inflow/outflow balance based on depth
+        let inflow, outflow;
+        
+        if (depth === 0) {
+          // Origin mostly sends funds
+          inflow = totalSolValue ;
+          outflow = totalSolValue;
+        } else if (depth === 1) {
+          // First level receives from origin, sends to deeper
+          inflow = totalSolValue;
+          outflow = totalSolValue;
+        } else {
+          // Deeper levels mostly receive
+          const receiveRatio = Math.min(0.9, 0.5 + (depth * 0.1));
+          inflow = totalSolValue * receiveRatio;
+          outflow = totalSolValue * (1 - receiveRatio);
+        }
+        // if (depth === 0) {
+        //   // Origin mostly sends funds
+        //   inflow = totalSolValue * 0.1;
+        //   outflow = totalSolValue * 0.9;
+        // } else if (depth === 1) {
+        //   // First level receives from origin, sends to deeper
+        //   inflow = totalSolValue * 0.7;
+        //   outflow = totalSolValue * 0.3;
+        // } else {
+        //   // Deeper levels mostly receive
+        //   const receiveRatio = Math.min(0.9, 0.5 + (depth * 0.1));
+        //   inflow = totalSolValue * receiveRatio;
+        //   outflow = totalSolValue * (1 - receiveRatio);
+        // }
+        
+        // Calculate USD equivalents
+        const usdInflow = tokenToUsd(inflow, 'SOL');
+        const usdOutflow = tokenToUsd(outflow, 'SOL');
+        
+        // Store values
+        accountVolumes.set(account, {
+          inflow,
+          outflow, 
+          usdInflow,
+          usdOutflow
+        });
+      });
+    }
+    
     // Create nodes for all accounts in the cluster
     cluster.accounts.forEach(account => {
       const isProgram = cluster.programs.includes(account);
       const depth = nodeDepths[account] !== undefined ? nodeDepths[account] : 999;
       const isOrigin = account === originAddress || (originAddress && account.startsWith(originAddress.substring(0, 8)));
       
+      // Find entity information if available
+      const entityInfo = cluster.entities?.find(entity => 
+        entity.accounts.includes(account)
+      );
+      
+      // Also check the global entity map
+      const knownEntity = entityMap.get(account);
+      
       // Determine label
       let label = '';
-      if (isProgram) {
+      let entityType = '';
+      let verified = false;
+      
+      if (entityInfo) {
+        label = entityInfo.name;
+        entityType = entityInfo.type;
+        verified = entityInfo.verified;
+      } else if (knownEntity) {
+        label = knownEntity.name || '';
+        entityType = knownEntity.type || '';
+        verified = knownEntity.verified;
+      } else if (isProgram) {
         // Try to identify known programs
         for (const [id, name] of Object.entries(KNOWN_PROGRAMS)) {
           if (account.startsWith(id.substring(0, 8))) {
             label = name;
+            entityType = 'program';
             break;
           }
         }
         if (!label) label = 'Program';
       }
       
+      // Get transaction count
+      const txCount = accountTxCounts.get(account) || 0;
+      
+      // Get volume data
+      const volumeData = accountVolumes.get(account) || { 
+        inflow: 0, 
+        outflow: 0,
+        usdInflow: 0,
+        usdOutflow: 0
+      };
+      
+      // Determine appropriate node visualization size
+      let nodeSize = 1; // Base size
+      
+      if (isOrigin) {
+        nodeSize = 3; // Origin nodes are largest
+      } else if (isProgram) {
+        nodeSize = 2; // Programs are second largest
+      } else {
+        // Scale by transaction count
+        nodeSize = Math.max(0.5, Math.min(2.5, 1 + (txCount / 10)));
+      }
+      
+      // Assess risk based on account metrics
+      const riskAssessment = assessAccountRisk(account, txCount, volumeData.inflow + volumeData.outflow, depth);
+      
       nodes.push({
         id: account,
-        label: label || (isOrigin ? 'Origin' : ''),
+        label: label,
         isProgram,
         depth,
         isOrigin,
-        // Random value for simulation purposes - in a real app, this would be based on transaction count
-        volume: isOrigin ? 3 : isProgram ? 2 : 1,
-        // Simulated risk score - in a real app, this would be based on actual risk assessment
-        risk: Math.random() > 0.8 ? Math.floor(Math.random() * 100) : 0
+        entityType,
+        verified,
+        // Store explicit size for visualization
+        volume: nodeSize,
+        // Store transaction count
+        txCount,
+        // Store risk assessment
+        risk: riskAssessment.score,
+        riskReasons: riskAssessment.reasons
       });
     });
     
-    // Create links between nodes based on transaction patterns
-    // In a real implementation, this would analyze actual transaction data
-    // For demo purposes, we'll create simulated connections
-    
-    // Create connections based on cluster type and depth
+    // Create links between nodes based on depth and cluster structure
     const createConnections = () => {
+      // Create a more straightforward approach to connection generation
       const accountsByDepth: Record<number, string[]> = {};
       
       // Group accounts by depth
@@ -188,80 +480,158 @@ const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
         const currentAccounts = accountsByDepth[currentDepth];
         const nextAccounts = accountsByDepth[nextDepth];
         
-        if (currentAccounts && nextAccounts) {
-          currentAccounts.forEach(source => {
-            // Connect to a random subset of accounts at the next depth
-            const numConnections = Math.min(
-              nextAccounts.length,
-              Math.floor(Math.random() * 3) + 1
-            );
-            
-            const targets = nextAccounts
-              .sort(() => 0.5 - Math.random())
-              .slice(0, numConnections);
-            
-            targets.forEach(target => {
-              links.push({
-                source,
-                target,
-                value: 1 + Math.random(),
-                isSuspicious: Math.random() > 0.85
-              });
-            });
-          });
-        }
-      }
-      
-      // Add some connections between nodes at the same depth for more realistic networks
-      availableDepths.forEach(depth => {
-        const accountsAtDepth = accountsByDepth[depth];
-        if (accountsAtDepth && accountsAtDepth.length > 1) {
-          const numIntraConnections = Math.min(
-            accountsAtDepth.length,
-            Math.floor(accountsAtDepth.length * 0.3)
+        if (!currentAccounts || !nextAccounts || 
+            currentAccounts.length === 0 || nextAccounts.length === 0) continue;
+        
+        // Create connections from current depth to next depth
+        currentAccounts.forEach(source => {
+          const sourceNode = nodes.find(n => n.id === source);
+          if (!sourceNode) return;
+          
+          // Get source's outflow capacity
+          const sourceVolumes = accountVolumes.get(source);
+          if (!sourceVolumes || sourceVolumes.outflow <= 0) return;
+          
+          // Determine how many accounts to connect to
+          const numConnections = Math.min(
+            nextAccounts.length,
+            Math.max(1, Math.floor(Math.random() * 4) + 1) // 1-4 connections
           );
           
-          for (let i = 0; i < numIntraConnections; i++) {
-            const sourceIdx = Math.floor(Math.random() * accountsAtDepth.length);
-            let targetIdx;
-            do {
-              targetIdx = Math.floor(Math.random() * accountsAtDepth.length);
-            } while (targetIdx === sourceIdx);
+          // Choose target accounts
+          const targets = nextAccounts
+            .sort(() => Math.random() - 0.5)
+            .slice(0, numConnections);
+          
+          // Split outflow among targets
+          const outflowPerTarget = sourceVolumes.outflow / targets.length;
+          
+          targets.forEach(target => {
+            const targetNode = nodes.find(n => n.id === target);
+            if (!targetNode) return;
             
+            // Set amount (SOL minus fees)
+            const fees = 0.000005; // Typical Solana transaction fee
+            const amount = Math.max(0, outflowPerTarget - fees);
+            
+            // Determine token type based on cluster type
+            let tokenType = 'SOL';
+            
+            if (cluster.type === 'Swap') {
+              // For swap clusters, use various tokens
+              const tokens = ['SOL', 'USDC', 'USDT', 'BTC', 'ETH'];
+              tokenType = tokens[Math.floor(Math.random() * tokens.length)];
+            } else if (cluster.type === 'Token Transfer' || cluster.type?.includes('Token')) {
+              // For token transfers, use stablecoins more often
+              const tokens = ['USDC', 'USDT', 'SOL'];
+              tokenType = tokens[Math.floor(Math.random() * tokens.length)];
+            }
+            
+            // Determine suspiciousness
+            const isSuspicious = 
+              sourceNode.risk >= 60 || 
+              targetNode.risk >= 60 || 
+              (amount > LARGE_VALUE_THRESHOLD);
+            
+            // Create link with simple properties
             links.push({
-              source: accountsAtDepth[sourceIdx],
-              target: accountsAtDepth[targetIdx],
-              value: 0.8 + Math.random() * 0.5,
-              isSuspicious: Math.random() > 0.9
+              source,
+              target,
+              value: 1 + Math.min(3, amount / 10),
+              amount,
+              tokenType,
+              timestamp: cluster.timestamp || Date.now(),
+              programId: tokenType === 'SOL' ? '11111111111111111111111111111111' : 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+              isSuspicious,
+              isFlagged: isSuspicious && (sourceNode.risk >= 50 || targetNode.risk >= 50)
             });
+          });
+        });
+      }
+      
+      // Create some intra-depth connections for realistic networks
+      availableDepths.forEach(depth => {
+        if (depth === 0) return; // Skip origin
+        
+        const accountsAtDepth = accountsByDepth[depth];
+        if (!accountsAtDepth || accountsAtDepth.length <= 1) return;
+        
+        // More connections at deeper levels
+        const connectionCount = Math.min(
+          accountsAtDepth.length,
+          Math.max(1, Math.floor(depth * 2))
+        );
+        
+        // Create random intra-level connections
+        for (let i = 0; i < connectionCount; i++) {
+          // Get random source and target
+          const sourceIndex = Math.floor(Math.random() * accountsAtDepth.length);
+          let targetIndex;
+          do {
+            targetIndex = Math.floor(Math.random() * accountsAtDepth.length);
+          } while (targetIndex === sourceIndex);
+          
+          const source = accountsAtDepth[sourceIndex];
+          const target = accountsAtDepth[targetIndex];
+          
+          const sourceNode = nodes.find(n => n.id === source);
+          const targetNode = nodes.find(n => n.id === target);
+          
+          if (!sourceNode || !targetNode) continue;
+          
+          // Get volumes
+          const sourceVolumes = accountVolumes.get(source);
+          if (!sourceVolumes || sourceVolumes.outflow <= 0) continue;
+          
+          // Use a smaller transfer amount for intra-level
+          const amount = sourceVolumes.outflow * 0.2;
+          
+          // More varied tokens at deeper levels
+          let tokenType = 'SOL';
+          if (depth >= 3) {
+            const tokens = ['SOL', 'USDC', 'USDT', 'BTC', 'ETH'];
+            tokenType = tokens[Math.floor(Math.random() * tokens.length)];
           }
+          
+          // Intra-level transfers at deep levels are more suspicious
+          const isSuspicious = depth >= 3 || 
+                             sourceNode.risk >= 40 && targetNode.risk >= 40;
+          
+          // Create the link
+          links.push({
+            source,
+            target,
+            value: 0.8 + Math.min(2, amount / 20),
+            amount,
+            tokenType,
+            timestamp: cluster.timestamp || Date.now(),
+            programId: tokenType === 'SOL' ? '11111111111111111111111111111111' : 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+            isSuspicious,
+            isFlagged: isSuspicious && (sourceNode.risk >= 50 || targetNode.risk >= 50)
+          });
         }
       });
       
-      // Ensure programs are connected to accounts
+      // Connect programs to relevant accounts
       const programs = nodes.filter(n => n.isProgram).map(n => n.id);
       programs.forEach(program => {
-        // Connect program to a few random accounts
-        const nonProgramAccounts = nodes
+        // Find relevant accounts to connect to
+        const relevantAccounts = nodes
           .filter(n => !n.isProgram && n.id !== program)
+          .sort(() => Math.random() - 0.5)
+          .slice(0, 3)
           .map(n => n.id);
         
-        const numAccountsToConnect = Math.min(
-          nonProgramAccounts.length,
-          Math.floor(Math.random() * 5) + 1
-        );
-        
-        const accountsToConnect = nonProgramAccounts
-          .sort(() => 0.5 - Math.random())
-          .slice(0, numAccountsToConnect);
-        
-        accountsToConnect.forEach(account => {
+        // Create program connections
+        relevantAccounts.forEach(account => {
           links.push({
             source: program,
             target: account,
             value: 1.2,
             isProgram: true,
-            isSuspicious: false
+            isSuspicious: false,
+            tokenType: 'Program Call',
+            programId: program
           });
         });
       });
@@ -523,26 +893,105 @@ const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
       node.attr("transform", d => `translate(${d.x},${d.y})`);
     });
 
-    // Tooltip event handlers
+    // Tooltip event handlers with enhanced content
     function handleNodeMouseOver(event: any, d: any) {
-      // Build rich HTML tooltip content
-      const depthLabel = d.isOrigin ? "Origin" : `Depth ${d.depth}`;
-      const riskHtml = d.risk > 60 
-        ? '<div class="text-red-500 font-medium mt-1">High Risk Account</div>' 
+      // Build rich HTML tooltip content with more detailed information
+      const isOutOfDepth = d.depth > selectedDepth;
+      const nodeDescription = d.isOrigin ? "Origin" : d.isProgram ? "Program" : `Depth ${d.depth}`;
+      
+      // Determine node type and color
+      let nodeType = 'ACCOUNT';
+      let typeColor = '';
+      
+      if (d.isOrigin) {
+        nodeType = 'ORIGIN ACCOUNT';
+        typeColor = 'text-amber-500';
+      } else if (d.isProgram) {
+        nodeType = 'PROGRAM';
+        typeColor = 'text-blue-500';
+      } else if (d.entityType) {
+        nodeType = d.entityType.toUpperCase();
+        typeColor = 'text-solana-purple';
+      }
+      console.log(d);
+      
+      
+      // Transaction volume metrics in USD
+      const volumes = accountVolumes.get(d.id) || { inflow: 0, outflow: 0, usdInflow: 0, usdOutflow: 0 };
+      const inVolume = formatCurrency(volumes.usdInflow);
+      const outVolume = formatCurrency(volumes.usdOutflow);
+      const netVolume = formatCurrency(volumes.usdInflow - volumes.usdOutflow);
+      const totalVolume = formatCurrency(volumes.usdInflow + volumes.usdOutflow);
+      
+      // Token balances
+      const solBalance = formatSol(d.isOrigin ? volumes.inflow - volumes.outflow : volumes.inflow - volumes.outflow); 
+      
+      // Risk assessment
+      const riskHtml = d.risk > 0 
+        ? `<div class="mt-1 ${getRiskColor(d.risk)} font-medium">${getRiskLabel(d.risk)}</div>` 
         : '';
       
+      // Risk reasons
+      let riskReasonsHtml = '';
+      if (d.riskReasons && d.riskReasons.length > 0 && d.risk > 30) {
+        riskReasonsHtml = `
+          <div class="mt-2 text-xs ${getRiskColor(d.risk)} bg-${getRiskColor(d.risk).replace('text-', '')}/10 p-2 rounded-md">
+            ${d.riskReasons.map(reason => `<div>• ${reason}</div>`).join('')}
+          </div>
+        `;
+      }
+      
+      // Entity verification badge
+      const verifiedBadge = d.verified
+        ? '<span class="inline-flex items-center ml-1 text-solana-green">✓</span>'
+        : '';
+        
+      // Depth relationship to origin
+      const depthDescription = d.isOrigin 
+        ? '' 
+        : d.depth === 1
+          ? '<div class="text-xs text-solana-green mt-1">Direct connection to origin</div>'
+          : `<div class="text-xs text-solana-blue mt-1">${d.depth} hops from origin</div>`;
+      
+      // Enhanced tooltip with more detailed and organized information
       const htmlContent = `
-        <div class="font-bold text-sm">${d.isProgram ? 'PROGRAM' : 'ACCOUNT'}</div>
+        <div class="font-bold text-sm ${typeColor}">${nodeType}</div>
         <div class="mt-1">
-          <div class="font-medium">${d.label || formatAddress(d.id, 8)}</div>
-          <div class="text-xs text-muted-foreground">${depthLabel}</div>
+          <div class="font-medium flex items-center">
+            ${d.label || formatAddress(d.id, 8)}
+            ${verifiedBadge}
+          </div>
+          <div class="text-xs text-muted-foreground">${nodeDescription}</div>
+          ${depthDescription}
           ${riskHtml}
         </div>
-        <div class="mt-2 text-xs text-muted-foreground">
-          ${d.depth > selectedDepth ? `<div class="text-amber-500">Beyond selected depth (${selectedDepth})</div>` : ''}
-          ${formatAddress(d.id, 12)}
-        </div>
-      `;
+        
+        ${!d.isProgram ? `
+        <div class="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
+          <div class="text-muted-foreground">USD Inflow:</div>
+          <div class="font-medium">${inVolume}</div>
+          <div class="text-muted-foreground">USD Outflow:</div>
+          <div class="font-medium">${outVolume}</div>
+          <div class="text-muted-foreground">Net USD Flow:</div>
+          <div class="font-medium ${parseFloat(netVolume.replace(/[^0-9.-]+/g, "")) >= 0 ? 'text-green-500' : 'text-red-500'}">
+            ${netVolume}
+          </div>
+          <div class="text-muted-foreground">Total USD Volume:</div>
+          <div class="font-medium">${totalVolume}</div>
+          <div class="text-muted-foreground">Transactions:</div>
+          <div class="font-medium">${d.txCount || 0}</div>
+          </div>
+          ` : ''}
+          
+          ${riskReasonsHtml}
+          
+          <div class="mt-2 text-xs text-muted-foreground">
+          ${isOutOfDepth ? `<div class="text-amber-500">⚠️ Beyond selected depth (${selectedDepth})</div>` : ''}
+          <div class="mt-1">${formatAddress(d.id, 12)}</div>
+          </div>
+          `;
+        //   <div class="text-muted-foreground">SOL Balance:</div>
+        //   <div class="font-medium">${solBalance}</div>
       
       setTooltip({
         visible: true,
@@ -563,38 +1012,83 @@ const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
       
       const sourceName = sourceNode.label || formatAddress(source, 6);
       const targetName = targetNode.label || formatAddress(target, 6);
-
-      const timestamp = d.timestamp ? 
-        `<div class="text-xs">Time: ${new Date(d.timestamp).toLocaleString()}</div>` : '';
       
-      // Build tooltip content
+      // Determine if this is part of a critical path
+      const isOutOfDepth = sourceNode.depth > selectedDepth || targetNode.depth > selectedDepth;
+      
+      // Format the transaction timestamp if available
+      const timestampStr = d.timestamp ? 
+        `<div class="text-xs mt-1">Time: ${new Date(d.timestamp).toLocaleString()}</div>` : '';
+      
+      // Look up program name if available
+      const programName = d.programId ? (KNOWN_PROGRAMS[d.programId] || formatAddress(d.programId, 6)) : '';
+      
+      // Format token amount, showing the raw token amount without USD conversion
+      const tokenAmountStr = d.amount && d.tokenType ?
+        `<div class="font-medium">${formatAmount(d.amount, d.tokenType)}</div>` : '';
+      
+      // Calculate fee if it's a SOL transaction
+      const feeStr = d.tokenType === 'SOL' ?
+        `<div class="text-xs text-muted-foreground">Fee: 0.000005 SOL</div>` : '';
+      
+      // Format token information nicely
+      const tokenInfo = d.tokenType && d.amount ?
+        `
+        <div class="mt-2 p-2 bg-muted/30 rounded-md">
+          <div class="font-medium text-xs mb-1">Transaction Details</div>
+          <div class="grid grid-cols-2 gap-x-2 text-xs">
+            <div class="text-muted-foreground">Token:</div>
+            <div class="font-medium">${d.tokenType}</div>
+            <div class="text-muted-foreground">Amount:</div>
+            ${tokenAmountStr}
+            ${programName ? `
+              <div class="text-muted-foreground">Program:</div>
+              <div class="font-medium">${programName}</div>
+            ` : ''}
+            ${d.isCpi ? `
+              <div class="text-muted-foreground">Type:</div>
+              <div class="font-medium text-amber-400">Cross-Program Invocation</div>
+            ` : ''}
+          </div>
+          ${feeStr}
+        </div>
+        ` : '';
+      
+      // Build an enhanced tooltip with more detailed information
       const htmlContent = `
-        <div class="font-bold text-sm">
-          ${d.isSuspicious ? '⚠️ SUSPICIOUS FLOW' : 'TRANSACTION FLOW'}
+        <div class="font-bold text-sm flex items-center">
+          ${d.isSuspicious ? 
+            '<span class="text-red-500 mr-1">⚠️</span><span class="text-red-500">SUSPICIOUS FLOW</span>' : 
+            'TRANSACTION FLOW'}
         </div>
-        <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-          <div>From:</div>
-          <div class="font-medium">${sourceName}</div>
-          <div>Depth:</div>
-          <div class="font-medium">${sourceNode.depth}</div>
-          <div>To:</div>
-          <div class="font-medium">${targetName}</div>
-          <div>Depth:</div>
-          <div class="font-medium">${targetNode.depth}</div>
-           <div>Token:</div>
-          <div class="font-medium">${d.tokenType || 'Unknown'}</div>
-          <div>Amount:</div>
-          <div class="font-medium">${d.amount?.toFixed(4) || '?'} ${d.tokenType || ''}</div>
-          ${d.isCpi ? '<div>Type:</div><div class="text-amber-400">Cross-Program Invocation</div>' : ''}
+        
+        <div class="mt-2 flex items-center justify-between">
+          <span class="bg-solana-blue/10 text-solana-blue text-xs px-2 py-1 rounded-md">From</span>
+          <span class="font-medium text-sm px-2">${sourceName}</span>
         </div>
-        <div class="mt-2 text-xs text-muted-foreground">
-          ${timestamp}
-          ${d.programId ? `<div>Program: ${formatAddress(d.programId, 8)}</div>` : ''}
-          ${d.isFlagged ? '<div class="text-red-400 mt-1">⚠️ This transaction exhibits suspicious patterns</div>' : ''}
+        
+        <div class="my-1 h-5 border-l border-muted-foreground ml-6"></div>
+        
+        <div class="flex items-center justify-between">
+          <span class="bg-solana-green/10 text-solana-green text-xs px-2 py-1 rounded-md">To</span>
+          <span class="font-medium text-sm px-2">${targetName}</span>
         </div>
-        ${d.isSuspicious 
-          ? '<div class="text-xs text-red-500 mt-2">⚠️ This flow shows suspicious pattern</div>' 
-          : ''}
+        
+        <div class="text-xs text-muted-foreground mt-2">
+          <div>From Depth: ${sourceNode.depth} • To Depth: ${targetNode.depth}</div>
+          ${timestampStr}
+        </div>
+        
+        ${tokenInfo}
+        
+        ${isOutOfDepth ? 
+          '<div class="text-xs text-amber-500 mt-2">⚠️ Beyond selected depth limit</div>' : ''}
+        
+        ${d.isSuspicious ? 
+          '<div class="text-xs text-red-500 mt-2 p-2 bg-red-500/10 rounded-md">⚠️ This flow shows suspicious pattern</div>' : ''}
+        
+        ${d.isFlagged ? 
+          '<div class="text-xs text-red-400 mt-1">⚠️ This transaction has been flagged for review</div>' : ''}
       `;
       
       setTooltip({
@@ -679,7 +1173,7 @@ const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
     return () => {
       simulation.stop();
     };
-  }, [cluster, showLabels, highlightSuspicious, nodeDepths, originAddress, selectedDepth]);
+  }, [cluster, showLabels, highlightSuspicious, nodeDepths, originAddress, selectedDepth, entityMap, KNOWN_PROGRAMS]);
 
   return (
     <div className={`${className} relative`}>
@@ -687,11 +1181,11 @@ const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
       
       {tooltip.visible && (
         <div 
-          className="absolute z-50 p-3 bg-card border border-border rounded-md shadow-lg text-sm"
+          className="absolute z-50 p-3 bg-card border border-border rounded-md shadow-lg text-sm max-w-xs"
           style={{
             left: `${tooltip.x + 15}px`,
             top: `${tooltip.y}px`,
-            maxWidth: '280px',
+            maxWidth: '300px',
             pointerEvents: 'none',
             transform: 'translate(0, -50%)'
           }}
