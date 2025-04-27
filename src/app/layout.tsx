@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 import { ThemeProvider } from '@/components/theme-provider'
 import { Toaster } from '@/components/ui/toaster'
+import { EntityProvider } from '@/contexts/EntityContext'
 
 export const metadata: Metadata = {
   title: 'Solana Forensics',
@@ -21,8 +22,10 @@ export default function RootLayout({
       </head>
       <body className="font-sans antialiased">
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
-          {children}
-          <Toaster />
+          <EntityProvider>
+            {children}
+            <Toaster />
+          </EntityProvider>
         </ThemeProvider>
       </body>
     </html>
