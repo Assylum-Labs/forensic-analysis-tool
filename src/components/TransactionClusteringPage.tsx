@@ -393,7 +393,7 @@ export default function TransactionClusteringPage() {
           <form onSubmit={handleClusterAnalysis} className="mt-4 flex flex-col md:flex-row gap-2">
             <div className="flex-1 flex gap-2">
               <Input
-                placeholder="Enter wallet address, token, or transaction pattern"
+                placeholder="Enter wallet address or token"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="flex-1"

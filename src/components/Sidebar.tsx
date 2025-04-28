@@ -26,8 +26,8 @@ const navigation = [
 ]
 
 const tools = [
-  { name: 'Search', href: '/search', icon: Search },
-  { name: 'Trace Explorer', href: '/trace-explorer', icon: LineChart },
+  // { name: 'Search', href: '/search', icon: Search },
+  // { name: 'Trace Explorer', href: '/trace-explorer', icon: LineChart },
   // { name: 'Identity Resolver', href: '/identity-resolver', icon: Fingerprint },
   // { name: 'Settings', href: '/settings', icon: Settings },
 ]
@@ -70,7 +70,7 @@ export function Sidebar() {
               </ul>
             </li>
             <li>
-              <div className="text-xs font-semibold text-muted-foreground">Tools</div>
+              {/* <div className="text-xs font-semibold text-muted-foreground">Tools</div>
               <ul role="list" className="mt-2 space-y-1">
                 {tools.map((item) => (
                   <li key={item.name}>
@@ -88,7 +88,7 @@ export function Sidebar() {
                     </Link>
                   </li>
                 ))}
-              </ul>
+              </ul> */}
             </li>
             {/* <li className="mt-auto">
               <div className="group -mx-2 flex gap-x-3 rounded-md p-2 text-sm font-semibold text-muted-foreground hover:bg-muted hover:text-foreground">

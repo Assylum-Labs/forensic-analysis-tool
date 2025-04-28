@@ -1,5 +1,8 @@
 // src/lib/transactionClustering.ts
 import { VersionedTransactionResponse } from "@solana/web3.js";
+import entityCache from "./EntityCacheService";
+import { createEntityLookupMap } from "./transactionProcessor";
+import { Entity } from "@/types";
 
 export interface TransactionCluster {
   id: string;
@@ -64,6 +67,10 @@ export async function clusterTransactions(
   const accountToTransactions = new Map<string, Set<string>>(); // Account to transactions
   const transactionById = new Map<string, VersionedTransactionResponse>(); // For quick lookup
 
+  entityCache.initialize();
+  const cachedEntities = entityCache.getAllEntities();
+  const mappedEntities = createEntityLookupMap(cachedEntities)
+
   // Extract accounts and build the graph
   for (const tx of transactions) {
     // Ensure we have a valid transaction
@@ -85,7 +92,7 @@ export async function clusterTransactions(
 
   // Analyze clusters for metadata and flag unusual behavior
   const analyzedClusters = await Promise.all(
-    clusters.map(cluster => analyzeClusterMetadata(cluster, transactionById))
+    clusters.map(cluster => analyzeClusterMetadata(cluster, transactionById, mappedEntities))
   );
   
   // Filter out tiny clusters (likely noise)
@@ -248,7 +255,8 @@ function findConnectedComponents(
 // Analyze cluster metadata
 async function analyzeClusterMetadata(
   cluster: TransactionCluster, 
-  transactionById: Map<string, VersionedTransactionResponse>
+  transactionById: Map<string, VersionedTransactionResponse>,
+  entities: Map<string, Entity>
 ): Promise<TransactionCluster> {
   let totalValue = 0;
   const programs = new Set<string>();
@@ -278,7 +286,7 @@ async function analyzeClusterMetadata(
   cluster.timestamp = earliestTimestamp !== Number.MAX_SAFE_INTEGER ? earliestTimestamp * 1000 : Date.now();
   
   // Try to determine cluster type
-  cluster.type = determineClusterType(cluster, transactionById);
+  cluster.type = determineClusterType(cluster, transactionById, entities);
   
   return cluster;
 }
@@ -425,36 +433,48 @@ function hasPotentialCircularPattern(cluster: TransactionCluster): boolean {
 // Determine the type of cluster based on patterns
 function determineClusterType(
   cluster: TransactionCluster,
-  transactionById: Map<string, VersionedTransactionResponse>
+  transactionById: Map<string, VersionedTransactionResponse>,
+  entities: Map<string, Entity>
 ): string {
   // Check program usage to determine likely type
-  const programSet = new Set(cluster.programs);
+//   const programSet = new Set(cluster.programs);
   
-  // Check if swap-related programs are involved
-  if (
-    hasProgram(programSet, KNOWN_PROGRAMS.JUPITER_PROGRAM) || 
-    hasProgram(programSet, KNOWN_PROGRAMS.ORCA_WHIRLPOOL) || 
-    hasProgram(programSet, KNOWN_PROGRAMS.RAYDIUM_SWAP) ||
-    hasProgram(programSet, KNOWN_PROGRAMS.SERUM_MARKET)
-  ) {
-    return "Swap";
-  }
-  
-  // Check for staking
-  if (
-    hasProgram(programSet, "Stake11111111111111111111111111111111111111") ||
-    hasProgram(programSet, KNOWN_PROGRAMS.MARINADE_FINANCE)
-  ) {
-    return "Staking";
-  }
-  
-  // Check for NFT marketplace
-  if (
-    hasProgram(programSet, KNOWN_PROGRAMS.MAGIC_EDEN) || 
-    hasProgram(programSet, KNOWN_PROGRAMS.METADATA_PROGRAM)
-  ) {
-    return "NFT Marketplace";
-  }
+//   // Check if swap-related programs are involved
+//   if (
+//     hasProgram(entities, KNOWN_PROGRAMS.JUPITER_PROGRAM) || 
+//     hasProgram(entities, KNOWN_PROGRAMS.ORCA_WHIRLPOOL) || 
+//     hasProgram(entities, KNOWN_PROGRAMS.RAYDIUM_SWAP) ||
+//     hasProgram(entities, KNOWN_PROGRAMS.SERUM_MARKET)
+//   ) {
+//     return "Swap";
+//   }
+
+  cluster.programs.forEach((program: string) => {
+    const entityData = entities.get(program)
+    if(!entityData) return 'Mixed Activity'
+    if(
+            entityData.subtype === 'aggregator' ||
+            entityData.subtype === 'amm' ||
+            entityData.name?.includes('Swap') ||
+            entityData.name?.includes('swap')
+    ){
+        return 'Swap'
+    }
+
+    if(
+            entityData.name?.includes('Stake') ||
+            entityData.name?.includes('stake')
+    ){
+        return 'Staking'
+    }
+
+    if(
+            entityData.name?.includes('NFT') ||
+            entityData.name?.includes('nft')
+    ){
+        return 'NFT Marketplace'
+    }
+  })
   
   // Check for multiple transfers
   let transferCount = 0;
@@ -484,14 +504,14 @@ function determineClusterType(
 }
 
 // Helper to check if a program set contains a program (with partial match support)
-function hasProgram(programSet: Set<string>, programId: string): boolean {
+function hasProgram(programSet: Map<string, Entity>, programId: string): boolean {
   if (programSet.has(programId)) return true;
   
   // Allow for partial matching on the first few characters
-  const firstChars = programId.substring(0, 8);
-  for (const program of programSet) {
-    if (program.startsWith(firstChars)) return true;
-  }
+//   const firstChars = programId.substring(0, 8);
+//   for (const program of programSet) {
+//     if (program.startsWith(firstChars)) return true;
+//   }
   
   return false;
 }

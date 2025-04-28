@@ -29,7 +29,7 @@ const TRANSACTION_TYPES = {
   NFT_PURCHASE: 'NFT Purchase',
 };
 
-const createEntityLookupMap = (entities: Entity[]): Map<string, Entity> => {
+export const createEntityLookupMap = (entities: Entity[]): Map<string, Entity> => {
     let entityMap = new Map<string, Entity>();
   if (!Array.isArray(entities)) {
     // We're already using cached entities
