@@ -1,16 +1,18 @@
 "use client"
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import { Entity } from '@/types';
 import { toast } from '@/components/ui/use-toast';
+import EntityService, { EntityFilters, PaginatedResult } from '@/lib/api-service';
 
-// Default entity data (will be replaced with actual data)
-const defaultEntities: Entity[] = [];
-
-// Define the context type
+// Define the context type with pagination
 interface EntityContextType {
   entities: Entity[];
   isLoading: boolean;
+  totalEntities: number;
+  currentPage: number;
+  pageSize: number;
+  filters: EntityFilters;
   addEntity: (entity: Omit<Entity, 'createdAt' | 'updatedAt'>) => Promise<Entity>;
   updateEntity: (address: string, updates: Partial<Entity>) => Promise<Entity>;
   deleteEntity: (address: string) => Promise<void>;
@@ -18,50 +20,62 @@ interface EntityContextType {
   addRelatedAddress: (address: string, relatedAddress: string) => Promise<Entity>;
   removeRelatedAddress: (address: string, relatedAddress: string) => Promise<Entity>;
   getEntityByAddress: (address: string) => Entity | undefined;
-  searchEntities: (query: string, filterType?: string) => Entity[];
+  searchEntities: (query: string, filterType?: string) => Promise<PaginatedResult<Entity>>;
   refreshEntities: () => Promise<void>;
+  setCurrentPage: (page: number) => void;
+  setPageSize: (size: number) => void;
+  setFilters: (filters: Partial<EntityFilters>) => void;
 }
 
 // Create the context
 const EntityContext = createContext<EntityContextType | undefined>(undefined);
 
-// API endpoints (would come from env in a production app)
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4600';
-const ENTITIES_ENDPOINT = `${API_URL}/entities`;
-
 // Provider component
 export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [entities, setEntities] = useState<Entity[]>(defaultEntities);
+  const [entities, setEntities] = useState<Entity[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [totalEntities, setTotalEntities] = useState<number>(0);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(10);
+  const [filters, setFilters] = useState<EntityFilters>({});
 
-  // Initial load of entities
-  useEffect(() => {
-    fetchEntities();
-  }, []);
-
-  // Fetch entities from API or local data
-  const fetchEntities = async () => {
+  // Memoized fetchEntities function to prevent recreation on each render
+  const fetchEntities = useCallback(async () => {
     setIsLoading(true);
     try {
-      // In a production app, you'd fetch from your API
-      // const response = await fetch(ENTITIES_ENDPOINT);
-      // const data = await response.json();
-
-      // For now, load from data.ts
-      // Dynamic import to avoid SSR issues
-      const { entities } = await import('@/lib/data');
-      setEntities(entities);
+      // Calculate offset based on current page and page size
+      const offset = (currentPage - 1) * pageSize;
+      
+      // Prepare filters
+      const apiFilters: EntityFilters = {
+        ...filters,
+        limit: pageSize,
+        offset: offset
+      };
+      
+      // Make API request
+      const data = await EntityService.getEntities(apiFilters);
+      setEntities(data.entities);
+      setTotalEntities(data.total);
     } catch (error) {
       console.error('Failed to fetch entities:', error);
       toast({
         title: 'Error',
-        description: 'Failed to load entity data',
+        description: error.message || 'Failed to load entity data',
         variant: 'destructive'
       });
+      // Fallback to empty array
+      setEntities([]);
+      setTotalEntities(0);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [currentPage, pageSize, filters]);
+
+  // Initial load of entities and when dependencies change
+  useEffect(() => {
+    fetchEntities();
+  }, [fetchEntities]); // Since fetchEntities is memoized, this won't create an infinite loop
 
   // Add a new entity
   const addEntity = async (entityData: Omit<Entity, 'createdAt' | 'updatedAt'>): Promise<Entity> => {
@@ -71,27 +85,23 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         throw new Error('Entity address is required');
       }
 
-      // Check if entity already exists
-      if (entities.some(e => e.address === entityData.address)) {
-        throw new Error('An entity with this address already exists');
+      // Make API request to create entity
+      const newEntity = await EntityService.createEntity(entityData);
+      
+      // Update local state if we're on the first page or refresh entities
+      if (currentPage === 1) {
+        setEntities(prev => {
+          // Maintain page size by removing the last item if we're at capacity
+          const updatedEntities = prev.length >= pageSize 
+            ? [newEntity, ...prev.slice(0, pageSize - 1)]
+            : [newEntity, ...prev];
+          return updatedEntities;
+        });
+        setTotalEntities(prev => prev + 1);
+      } else {
+        // If we're not on the first page, refresh the entity list
+        await fetchEntities();
       }
-
-      // In a production app, you'd POST to your API
-      // const response = await fetch(ENTITIES_ENDPOINT, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify(entityData)
-      // });
-      // const newEntity = await response.json();
-
-      // For now, create locally
-      const newEntity: Entity = {
-        ...entityData,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-
-      setEntities(prev => [...prev, newEntity]);
       
       toast({
         title: 'Entity Added',
@@ -113,30 +123,15 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   // Update an existing entity
   const updateEntity = async (address: string, updates: Partial<Entity>): Promise<Entity> => {
     try {
-      // Find the entity
-      const entityIndex = entities.findIndex(e => e.address === address);
-      if (entityIndex === -1) {
-        throw new Error('Entity not found');
-      }
-
-      // In a production app, you'd PUT to your API
-      // const response = await fetch(`${ENTITIES_ENDPOINT}/${address}`, {
-      //   method: 'PUT',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify(updates)
-      // });
-      // const updatedEntity = await response.json();
-
-      // For now, update locally
-      const updatedEntity: Entity = {
-        ...entities[entityIndex],
-        ...updates,
-        updatedAt: new Date().toISOString()
-      };
-
-      const newEntities = [...entities];
-      newEntities[entityIndex] = updatedEntity;
-      setEntities(newEntities);
+      // Make API request to update entity
+      const updatedEntity = await EntityService.updateEntity(address, updates);
+      
+      // Update local state
+      setEntities(prev => 
+        prev.map(entity => 
+          entity.address === address ? updatedEntity : entity
+        )
+      );
 
       toast({
         title: 'Entity Updated',
@@ -158,25 +153,29 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   // Delete an entity
   const deleteEntity = async (address: string): Promise<void> => {
     try {
-      // Find the entity
-      const entityIndex = entities.findIndex(e => e.address === address);
-      if (entityIndex === -1) {
-        throw new Error('Entity not found');
-      }
-
-      // In a production app, you'd DELETE to your API
-      // await fetch(`${ENTITIES_ENDPOINT}/${address}`, {
-      //   method: 'DELETE'
-      // });
-
-      // For now, delete locally
-      const entityName = entities[entityIndex].name || address;
+      // Find the entity name before deleting for the toast message
+      const entityToDelete = entities.find(e => e.address === address);
+      const entityName = entityToDelete?.name || address;
+      
+      // Make API request to delete entity
+      await EntityService.deleteEntity(address);
+      
+      // Update local state
       setEntities(prev => prev.filter(e => e.address !== address));
+      setTotalEntities(prev => prev - 1);
 
       toast({
         title: 'Entity Deleted',
         description: `Successfully deleted ${entityName}`
       });
+      
+      // If we deleted the last entity on a page and there are more pages, go back one page
+      if (entities.length === 1 && currentPage > 1) {
+        setCurrentPage(prevPage => prevPage - 1);
+      } else if (currentPage > 1 || entities.length > 1) {
+        // If we're not on the first page or there are still entities, refresh
+        await fetchEntities();
+      }
     } catch (error) {
       console.error('Failed to delete entity:', error);
       toast({
@@ -196,35 +195,15 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   // Add a related address to an entity
   const addRelatedAddress = async (address: string, relatedAddress: string): Promise<Entity> => {
     try {
-      // Find the entity
-      const entityIndex = entities.findIndex(e => e.address === address);
-      if (entityIndex === -1) {
-        throw new Error('Entity not found');
-      }
-
-      const entity = entities[entityIndex];
+      // Make API request to add related address
+      const updatedEntity = await EntityService.addRelatedAddress(address, relatedAddress);
       
-      // Check if address is already related
-      if (entity.relatedAddresses.includes(relatedAddress)) {
-        throw new Error('Address is already related to this entity');
-      }
-
-      // In a production app, you'd make an API call
-      // const response = await fetch(`${ENTITIES_ENDPOINT}/${address}/related/${relatedAddress}`, {
-      //   method: 'POST'
-      // });
-      // const updatedEntity = await response.json();
-
-      // For now, update locally
-      const updatedEntity: Entity = {
-        ...entity,
-        relatedAddresses: [...entity.relatedAddresses, relatedAddress],
-        updatedAt: new Date().toISOString()
-      };
-
-      const newEntities = [...entities];
-      newEntities[entityIndex] = updatedEntity;
-      setEntities(newEntities);
+      // Update local state
+      setEntities(prev => 
+        prev.map(entity => 
+          entity.address === address ? updatedEntity : entity
+        )
+      );
 
       toast({
         title: 'Related Address Added',
@@ -246,35 +225,15 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   // Remove a related address from an entity
   const removeRelatedAddress = async (address: string, relatedAddress: string): Promise<Entity> => {
     try {
-      // Find the entity
-      const entityIndex = entities.findIndex(e => e.address === address);
-      if (entityIndex === -1) {
-        throw new Error('Entity not found');
-      }
-
-      const entity = entities[entityIndex];
+      // Make API request to remove related address
+      const updatedEntity = await EntityService.removeRelatedAddress(address, relatedAddress);
       
-      // Check if address is not related
-      if (!entity.relatedAddresses.includes(relatedAddress)) {
-        throw new Error('Address is not related to this entity');
-      }
-
-      // In a production app, you'd make an API call
-      // const response = await fetch(`${ENTITIES_ENDPOINT}/${address}/related/${relatedAddress}`, {
-      //   method: 'DELETE'
-      // });
-      // const updatedEntity = await response.json();
-
-      // For now, update locally
-      const updatedEntity: Entity = {
-        ...entity,
-        relatedAddresses: entity.relatedAddresses.filter(addr => addr !== relatedAddress),
-        updatedAt: new Date().toISOString()
-      };
-
-      const newEntities = [...entities];
-      newEntities[entityIndex] = updatedEntity;
-      setEntities(newEntities);
+      // Update local state
+      setEntities(prev => 
+        prev.map(entity => 
+          entity.address === address ? updatedEntity : entity
+        )
+      );
 
       toast({
         title: 'Related Address Removed',
@@ -306,23 +265,30 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return entity;
   };
 
-  // Search entities by name or address
-  const searchEntities = (query: string, filterType?: string): Entity[] => {
-    const normalizedQuery = query.toLowerCase();
-    
-    return entities.filter(entity => {
-      // Apply type filter if specified
-      if (filterType && entity.type !== filterType) {
-        return false;
-      }
+  // Search entities by name, address, or related addresses
+  const searchEntities = async (query: string, filterType?: string): Promise<PaginatedResult<Entity>> => {
+    setIsLoading(true);
+    try {
+      // Prepare search filters
+      const searchFilters: EntityFilters = {
+        search: query,
+        type: filterType
+      };
       
-      // Search by name or address
-      return (
-        (entity.name && entity.name.toLowerCase().includes(normalizedQuery)) ||
-        entity.address.toLowerCase().includes(normalizedQuery) ||
-        entity.relatedAddresses.some(addr => addr.toLowerCase().includes(normalizedQuery))
-      );
-    });
+      // Make API request
+      const data = await EntityService.getEntities(searchFilters);
+      return data;
+    } catch (error) {
+      console.error('Failed to search entities:', error);
+      toast({
+        title: 'Error',
+        description: error.message || 'Failed to search entities',
+        variant: 'destructive'
+      });
+      return { entities: [], total: 0 };
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Force refresh entities
@@ -330,10 +296,26 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     await fetchEntities();
   };
 
+  // Handle filter changes in a way that avoids infinite loops
+  const handleSetFilters = useCallback((newFilters: Partial<EntityFilters>) => {
+    setFilters(prev => ({
+      ...prev,
+      ...newFilters
+    }));
+    // Only reset the page if we're not already on the first page
+    if (currentPage !== 1) {
+      setCurrentPage(1);
+    }
+  }, [currentPage]);
+
   // Context value
   const value: EntityContextType = {
     entities,
     isLoading,
+    totalEntities,
+    currentPage,
+    pageSize,
+    filters,
     addEntity,
     updateEntity,
     deleteEntity,
@@ -342,7 +324,10 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     removeRelatedAddress,
     getEntityByAddress,
     searchEntities,
-    refreshEntities
+    refreshEntities,
+    setCurrentPage,
+    setPageSize,
+    setFilters: handleSetFilters
   };
 
   return (

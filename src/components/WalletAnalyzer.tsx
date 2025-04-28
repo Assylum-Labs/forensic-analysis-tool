@@ -6,7 +6,8 @@ import { fetchEntityData, processTransactionData } from '@/lib/api';
 import { formatAddress } from '@/lib/utils';
 import { Loader2 } from 'lucide-react';
 import { Entity } from '@/types';
-import { entities } from '@/lib/data';
+import { useEntities } from '@/contexts/EntityContext';
+// import { entities } from '@/lib/data';
 
 interface WalletAnalyzerProps {
   address: string;
@@ -40,6 +41,7 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
     endDate: null as Date | null
   });
   const { toast } = useToast();
+  const { entities } = useEntities()
 
   // Use controlled or internal loading state
   const isLoading = controlledIsLoading !== undefined ? controlledIsLoading : internalIsLoading;

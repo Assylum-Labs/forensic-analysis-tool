@@ -1,9 +1,9 @@
 "use client"
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Entity } from '@/types';
 import { Button } from '@/components/ui/button';
-import { CheckCircle2, Edit, ExternalLink, Filter, Search, Trash2 } from 'lucide-react';
+import { CheckCircle2, ExternalLink, Filter, Search, Trash2 } from 'lucide-react';
 import { formatAddress } from '@/lib/utils';
 import { useEntities } from '@/contexts/EntityContext';
 import { Input } from '@/components/ui/input';
@@ -23,6 +23,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
+import Pagination from '@/components/Pagination';
+import LoadingState from '@/components/LoadingState';
 
 interface EntityListProps {
   onAddEntity?: () => void;
@@ -33,12 +35,72 @@ const EntityList: React.FC<EntityListProps> = ({
   onAddEntity,
   className = ""
 }) => {
-  const { entities, deleteEntity, verifyEntity } = useEntities();
+  const { 
+    entities, 
+    deleteEntity, 
+    verifyEntity, 
+    isLoading,
+    totalEntities,
+    currentPage,
+    pageSize,
+    setCurrentPage,
+    setPageSize,
+    setFilters,
+    refreshEntities
+  } = useEntities();
+  
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedType, setSelectedType] = useState<string>('');
   const [showVerifiedOnly, setShowVerifiedOnly] = useState(false);
   const [selectedEntity, setSelectedEntity] = useState<Entity | null>(null);
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  
+  // Debounce search query
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+    }, 300);
+    
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+  
+  // Apply filters when they change - using a ref to track previous values
+  const prevFiltersRef = React.useRef({
+    search: '',
+    type: '',
+    verified: undefined as boolean | undefined
+  });
+  
+  // Use a memoized callback to avoid recreating the function on every render
+  const applyFilters = useCallback(() => {
+    const prevFilters = prevFiltersRef.current;
+    
+    // Only update filters if they've actually changed
+    if (prevFilters.search !== debouncedSearch || 
+        prevFilters.type !== selectedType || 
+        prevFilters.verified !== (showVerifiedOnly || undefined)) {
+      
+      // Update our reference to the current filter values
+      prevFiltersRef.current = {
+        search: debouncedSearch,
+        type: selectedType,
+        verified: showVerifiedOnly || undefined
+      };
+      
+      // Apply the filters
+      setFilters({
+        type: selectedType,
+        verified: showVerifiedOnly || undefined,
+        search: debouncedSearch
+      });
+    }
+  }, [debouncedSearch, selectedType, showVerifiedOnly, setFilters]);
+  
+  // Apply filters effect
+  useEffect(() => {
+    applyFilters();
+  }, [applyFilters]);
   
   const handleDeleteEntity = async (address: string) => {
     if (confirm('Are you sure you want to delete this entity? This action cannot be undone.')) {
@@ -67,43 +129,36 @@ const EntityList: React.FC<EntityListProps> = ({
     window.open(`https://solscan.io/account/${address}`, '_blank');
   };
   
-  // Filter and sort entities
-  const filteredEntities = useMemo(() => {
-    return entities
-      .filter(entity => {
-        // Apply type filter
-        if (selectedType && entity.type !== selectedType) {
-          return false;
-        }
-        
-        // Apply verified filter
-        if (showVerifiedOnly && !entity.verified) {
-          return false;
-        }
-        
-        // Apply search query
-        if (searchQuery) {
-          const query = searchQuery.toLowerCase();
-          return (
-            (entity.name && entity.name.toLowerCase().includes(query)) ||
-            entity.address.toLowerCase().includes(query) ||
-            (entity.description && entity.description.toLowerCase().includes(query)) ||
-            entity.relatedAddresses.some(addr => addr.toLowerCase().includes(query))
-          );
-        }
-        
-        return true;
-      })
-      .sort((a, b) => {
-        // Sort verified entities first
-        if (a.verified !== b.verified) {
-          return a.verified ? -1 : 1;
-        }
-        
-        // Then sort by name
-        return (a.name || '').localeCompare(b.name || '');
-      });
-  }, [entities, searchQuery, selectedType, showVerifiedOnly]);
+  // Handle page changes
+  const handlePageChange = useCallback((newPage: number) => {
+    setCurrentPage(newPage);
+  }, [setCurrentPage]);
+  
+  // Handle page size changes
+  const handlePageSizeChange = useCallback((newSize: string) => {
+    setPageSize(parseInt(newSize));
+  }, [setPageSize]);
+  
+  // Reset filters
+  const resetFilters = useCallback(() => {
+    setSelectedType('');
+    setShowVerifiedOnly(false);
+    setSearchQuery('');
+    
+    // Update reference values to avoid unnecessary updates
+    prevFiltersRef.current = {
+      search: '',
+      type: '',
+      verified: undefined
+    };
+    
+    // Apply empty filters
+    setFilters({
+      type: '',
+      verified: undefined,
+      search: ''
+    });
+  }, [setFilters]);
   
   const entityTypes = getEntityTypes();
   
@@ -126,13 +181,18 @@ const EntityList: React.FC<EntityListProps> = ({
     }
   };
   
+  // Calculate total pages
+  const totalPages = useMemo(() => {
+    return Math.ceil(totalEntities / pageSize);
+  }, [totalEntities, pageSize]);
+  
   return (
     <div className={`rounded-md border border-border ${className}`}>
       <div className="p-4 border-b border-border flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 className="font-medium">Entity Database</h3>
           <p className="text-sm text-muted-foreground mt-1">
-            {filteredEntities.length} entities found
+            {totalEntities} entities found
           </p>
         </div>
         <div className="flex gap-2 items-center">
@@ -192,10 +252,7 @@ const EntityList: React.FC<EntityListProps> = ({
                   size="sm"
                   variant="outline"
                   className="w-full mt-2"
-                  onClick={() => {
-                    setSelectedType('');
-                    setShowVerifiedOnly(false);
-                  }}
+                  onClick={resetFilters}
                 >
                   Reset Filters
                 </Button>
@@ -224,8 +281,14 @@ const EntityList: React.FC<EntityListProps> = ({
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {filteredEntities.length > 0 ? (
-              filteredEntities.map((entity) => (
+            {isLoading ? (
+              <tr>
+                <td colSpan={6} className="px-4 py-6 text-center">
+                  <LoadingState message="Loading entities..." size="sm" />
+                </td>
+              </tr>
+            ) : entities.length > 0 ? (
+              entities.map((entity) => (
                 <tr 
                   key={entity.address} 
                   className="hover:bg-muted/50 cursor-pointer"
@@ -304,7 +367,7 @@ const EntityList: React.FC<EntityListProps> = ({
             ) : (
               <tr>
                 <td className="px-4 py-6 text-center text-muted-foreground" colSpan={6}>
-                  {searchQuery || selectedType || showVerifiedOnly
+                  {debouncedSearch || selectedType || showVerifiedOnly
                     ? 'No entities match your search criteria'
                     : 'No entities found. Add some to get started.'}
                 </td>
@@ -312,6 +375,19 @@ const EntityList: React.FC<EntityListProps> = ({
             )}
           </tbody>
         </table>
+      </div>
+      
+      {/* Pagination */}
+      <div className="p-4 border-t border-border">
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          pageSize={pageSize}
+          totalItems={totalEntities}
+          onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
+          isLoading={isLoading}
+        />
       </div>
       
       {selectedEntity && (

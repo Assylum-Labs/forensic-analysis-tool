@@ -41,6 +41,7 @@ const EntityForm: React.FC<EntityFormProps> = ({
 }) => {
   const { addEntity, updateEntity } = useEntities();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { entities } = useEntities()
   
   const [formData, setFormData] = useState<Partial<Entity>>({
     address: '',
@@ -67,7 +68,7 @@ const EntityForm: React.FC<EntityFormProps> = ({
       
       // Update available subtypes based on the entity type
       if (entityToEdit.type) {
-        setAvailableSubtypes(getEntitySubtypes(entityToEdit.type));
+        setAvailableSubtypes(getEntitySubtypes(entityToEdit.type, entities));
       }
     } else {
       // Reset form for creating a new entity
@@ -132,7 +133,7 @@ const EntityForm: React.FC<EntityFormProps> = ({
     
     // Update available subtypes when type changes
     if (name === 'type') {
-      setAvailableSubtypes(getEntitySubtypes(value));
+      setAvailableSubtypes(getEntitySubtypes(value, entities));
       
       // Reset subtype if type changes
       setFormData(prev => ({
@@ -201,7 +202,7 @@ const EntityForm: React.FC<EntityFormProps> = ({
     }
   };
   
-  const entityTypes = getEntityTypes();
+  const entityTypes = getEntityTypes(entities);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -279,9 +280,7 @@ const EntityForm: React.FC<EntityFormProps> = ({
                   ))}
                   <SelectItem value="exchange">EXCHANGE</SelectItem>
                   <SelectItem value="nft_marketplace">NFT MARKETPLACE</SelectItem>
-                  <SelectItem value="defi_protocol">DEFI PROTOCOL</SelectItem>
                   <SelectItem value="token">TOKEN</SelectItem>
-                  <SelectItem value="project">PROJECT</SelectItem>
                   <SelectItem value="foundation">FOUNDATION</SelectItem>
                   <SelectItem value="wallet">WALLET</SelectItem>
                   <SelectItem value="contract">CONTRACT</SelectItem>
@@ -292,7 +291,7 @@ const EntityForm: React.FC<EntityFormProps> = ({
               )}
             </div>
             
-            <div className="space-y-2">
+            {['exchange', 'token', 'defi_protocol'].includes(formData.type || '') && <div className="space-y-2">
               <Label htmlFor="subtype">Subtype</Label>
               <Select
                 value={formData.subtype || ''}
@@ -332,7 +331,7 @@ const EntityForm: React.FC<EntityFormProps> = ({
                   )}
                 </SelectContent>
               </Select>
-            </div>
+            </div>}
           </div>
           
           <div className="space-y-2">

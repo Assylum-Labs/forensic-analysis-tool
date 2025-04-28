@@ -19,6 +19,7 @@ import {
 import { Connection, PublicKey } from '@solana/web3.js';
 import { processTransactionFlow } from '@/lib/transactionProcessor';
 import TransactionFlowGraph from '@/components/TransactionFlowGraph';
+import { useEntities } from '@/contexts/EntityContext';
 
 export default function TransactionAnalysisPage() {
   const [signature, setSignature] = useState('');
@@ -29,6 +30,7 @@ export default function TransactionAnalysisPage() {
   const [criticalPath, setCriticalPath] = useState([]);
   const [showCriticalPath, setShowCriticalPath] = useState(true);
   const { toast } = useToast();
+  const { entities } = useEntities()
 
   const handleSignatureChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSignature(e.target.value);
@@ -64,7 +66,7 @@ export default function TransactionAnalysisPage() {
       setTransactionData(transaction);
       
       // Process transaction to get fund flows
-      const { graphData, type, critical } = await processTransactionFlow(transaction);
+      const { graphData, type, critical } = await processTransactionFlow(transaction, entities);
       setFlowGraphData(graphData);
       setTransactionType(type);
       setCriticalPath(critical);

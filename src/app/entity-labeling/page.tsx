@@ -102,7 +102,7 @@ export default function EntityLabelingPage() {
             </TabsList>
             
             <TabsContent value="entities" className="flex-1 overflow-auto">
-              <EntityList onAddEntity={handleAddEntity} className="h-full" />
+              <EntityList onAddEntity={handleAddEntity} className="h-auto" />
             </TabsContent>
             
             <TabsContent value="exchanges" className="flex-1 overflow-auto">
