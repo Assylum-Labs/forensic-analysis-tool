@@ -1,5 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
-import { entities as entityList } from '@/lib/data';
+// import { entities as entityList } from '@/lib/data';
+import { entityCache } from '@/lib/EntityCacheService';
 import { Entity } from '@/types';
 
 // Known program IDs for better identification
@@ -28,6 +29,34 @@ const TRANSACTION_TYPES = {
   NFT_PURCHASE: 'NFT Purchase',
 };
 
+const createEntityLookupMap = (entities: Entity[]): Map<string, Entity> => {
+    let entityMap = new Map<string, Entity>();
+  if (!Array.isArray(entities)) {
+    // We're already using cached entities
+    entities = entityCache.getAllEntities();
+  }
+  
+  // Build entity map for quick lookup if needed (when entities is an array)
+  entities.forEach(entity => {
+    entityMap.set(entity.address, entity);
+    
+    // Also map related addresses for quick lookup
+    if (entity.relatedAddresses && entity.relatedAddresses.length > 0) {
+      entity.relatedAddresses.forEach(relAddr => {
+        if (!entityMap.has(relAddr)) {
+          entityMap.set(relAddr, {
+            ...entity,
+            address: relAddr, // Override address with the related address
+            isRelatedAddress: true // Mark as related address
+          });
+        }
+      });
+    }
+  });
+
+    return entityMap
+}
+
 /**
  * Process transaction data to map the flow of funds
  */
@@ -37,6 +66,10 @@ export async function processTransactionFlow(transaction: any) {
   if (!meta || !txData) {
     throw new Error("Invalid transaction data");
   }
+
+  entityCache.initialize();
+  const cachedEntities = entityCache.getAllEntities();
+  const mappedEntities = createEntityLookupMap(cachedEntities)
 
   const instructions = txData.message.instructions || txData.message.compiledInstructions;
   const accountKeys =  txData.message.accountKeys ||  txData.message.staticAccountKeys
@@ -68,8 +101,9 @@ export async function processTransactionFlow(transaction: any) {
     if (!nodes.some(n => n.id === address)) {
       // Check if this is a known entity
       let entityInfo = null;
-      if (entityList) {
-        entityInfo = entityList.find((entity: Entity) => entity.address === address);
+      if (mappedEntities) {
+        entityInfo = mappedEntities.get(address)
+        // entityInfo = entityList.find((entity: Entity) => entity.address === address);
       }
       
       nodes.push({
@@ -77,7 +111,8 @@ export async function processTransactionFlow(transaction: any) {
         type,
         label: entityInfo?.name || label,
         verified: entityInfo?.verified || false,
-        volume
+        volume,
+        ...entityInfo
       });
     }
   };
@@ -100,13 +135,14 @@ export async function processTransactionFlow(transaction: any) {
       accountType = 'program';
       
       // Track programs used
-      const programName = Object.keys(KNOWN_PROGRAMS).find(
-        key => KNOWN_PROGRAMS[key] === address
-      );
+      const programEntity = mappedEntities.get(address)
+    //   const programName = Object.keys(KNOWN_PROGRAMS).find(
+    //     key => KNOWN_PROGRAMS[key] === address
+    //   );
       
       programsUsed.push({
         id: address,
-        name: programName || null,
+        name: programEntity?.name || null,
         type: 'program'
       });
     }
@@ -125,9 +161,10 @@ export async function processTransactionFlow(transaction: any) {
       accountType = 'program';
       
       if (!programsUsed.some(p => p.id === address)) {
+        let entity = mappedEntities.get(address)
         programsUsed.push({
           id: address,
-          name: null,
+          name: entity?.name || null,
           type: 'program'
         });
       }
@@ -344,7 +381,8 @@ export async function processTransactionFlow(transaction: any) {
       p.id === KNOWN_PROGRAMS.JUPITER_PROGRAM || 
       p.id === KNOWN_PROGRAMS.ORCA_WHIRLPOOL ||
       p.id === KNOWN_PROGRAMS.RAYDIUM_SWAP
-    ) &&
+    ) 
+    &&
     links.some(l => l.tokenSymbol !== 'SOL') &&
     logString.includes('transfer')
   ) {
@@ -439,7 +477,7 @@ export async function processTransactionFlow(transaction: any) {
   }
   
   // Identify critical path based on transaction type and instruction flow
-  const criticalPath = findCriticalPath(nodes, links, transaction, transactionType);
+  const criticalPath = findCriticalPath(nodes, links, transaction, transactionType, mappedEntities);
   
   // Return the processed data
   return {
@@ -449,10 +487,12 @@ export async function processTransactionFlow(transaction: any) {
       programs: programsUsed,
       accounts: accountsInfo.map(a => {
         // Get entity information if available
-        const entityInfo = entityList?.find((entity: Entity) => entity.address === a.id);
+        const entityInfo = mappedEntities.get(a.id);
+        // const entityInfo = entityList?.find((entity: Entity) => entity.address === a.id);
         return {
           ...a,
-          label: entityInfo?.name || a.label
+          label: entityInfo?.name || a.label,
+          ...entityInfo
         };
       })
     },
@@ -464,7 +504,7 @@ export async function processTransactionFlow(transaction: any) {
 /**
  * Find the critical path based on transaction type and instruction flow
  */
-function findCriticalPath(nodes, links, transactionData, transactionType) {
+function findCriticalPath(nodes, links, transactionData, transactionType, mappedEntities: Map<string, Entity>) {
   // Get transaction details for analysis
   const { transaction, meta } = transactionData;
   if (!transaction || !meta) return [];
@@ -585,10 +625,22 @@ function findCriticalPath(nodes, links, transactionData, transactionType) {
       const userAccount = accountKeys[0]; // Fee payer is typically the user
       
       // Find DEX program in instructions
+      let allAMMs: string[] = []
+      mappedEntities.forEach((entity: Entity) => {
+        if(
+            entity.subtype === 'aggregator' ||
+            entity.subtype === 'amm' ||
+            entity.name?.includes('Swap') ||
+            entity.name?.includes('swap')
+        ){
+            allAMMs.push(entity.address)
+        }
+      })
       const dexPrograms = [
         KNOWN_PROGRAMS.JUPITER_PROGRAM,
         KNOWN_PROGRAMS.ORCA_WHIRLPOOL,
-        KNOWN_PROGRAMS.RAYDIUM_SWAP
+        KNOWN_PROGRAMS.RAYDIUM_SWAP,,
+        ...allAMMs
       ];
       
       // Add user to critical path

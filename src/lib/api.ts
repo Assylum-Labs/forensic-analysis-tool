@@ -1,17 +1,36 @@
 import { Entity } from "@/types";
 import { Transaction, VersionedTransactionResponse } from "@solana/web3.js";
+import { entityCache } from "./EntityCacheService";
 
 // Base API configuration
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/api';
 
-// Entity data fetching
+// Entity data fetching - but now we use cache first if available
 export const fetchEntityData = async () => {
   try {
+    // If we have a populated cache and it doesn't need refresh, use it
+    if (entityCache.size() > 0 && !entityCache.needsRefresh()) {
+      return { entities: entityCache.getAllEntities() };
+    }
+    
+    // Otherwise fetch from API
     const response = await fetch(`${API_BASE}/entities?limit=1500`);
     if (!response.ok) throw new Error('Failed to fetch entity data');
-    return response.json();
+    
+    const data = await response.json();
+    
+    // Update the cache with fetched entities
+    entityCache.updateCache(data.entities);
+    
+    return data;
   } catch (error) {
     console.error('Error fetching entity data:', error);
+    
+    // If we have any cached entities, return those as fallback
+    if (entityCache.size() > 0) {
+      return { entities: entityCache.getAllEntities() };
+    }
+    
     return { entities: [] };
   }
 };
@@ -45,13 +64,11 @@ const getTokenPrice = (mint: string, symbol: string) => {
   return 1.00; // Default to 1 USD if token price is unknown
 };
 
-// Transaction processing utilities
-// processTransactionData function with simplified token view
+// Transaction processing utilities with optimized entity lookup
 export const processTransactionData = async (
   transactions: VersionedTransactionResponse[],
   centralAddress: string,
   entities: Entity[],
-  // entities: Map<string, any>,
   viewMode: 'wallet' | 'token' = 'wallet'
 ) => {
   // Initialize data structures
@@ -63,6 +80,31 @@ export const processTransactionData = async (
   const mintToSymbol = new Map(); // Track mint address -> token symbol
   const tokenMints = new Set(); // Track all token mints
   const mintVolumes = new Map(); // Track volume per token mint
+
+  // Create an entity lookup map for O(1) lookup if not already using cache
+  let entityMap = new Map<string, Entity>();
+  if (!Array.isArray(entities)) {
+    // We're already using cached entities
+    entities = entityCache.getAllEntities();
+  }
+  
+  // Build entity map for quick lookup if needed (when entities is an array)
+  entities.forEach(entity => {
+    entityMap.set(entity.address, entity);
+    
+    // Also map related addresses for quick lookup
+    if (entity.relatedAddresses && entity.relatedAddresses.length > 0) {
+      entity.relatedAddresses.forEach(relAddr => {
+        if (!entityMap.has(relAddr)) {
+          entityMap.set(relAddr, {
+            ...entity,
+            address: relAddr, // Override address with the related address
+            isRelatedAddress: true // Mark as related address
+          });
+        }
+      });
+    }
+  });
 
   // Initialize volume tracking for central address
   addressVolumes.set(centralAddress, {
@@ -336,7 +378,8 @@ export const processTransactionData = async (
                   nodes,
                   links,
                   addressVolumes,
-                  mintVolumes
+                  mintVolumes,
+                  entityMap // Pass entity map for O(1) lookup
                 );
               } else {
                 // WALLET VIEW
@@ -426,7 +469,8 @@ export const processTransactionData = async (
                     nodes,
                     links,
                     addressVolumes,
-                    mintVolumes
+                    mintVolumes,
+                    entityMap // Pass entity map for O(1) lookup
                   );
                 } else {
                   // WALLET VIEW
@@ -545,7 +589,8 @@ export const processTransactionData = async (
                 nodes,
                 links,
                 addressVolumes,
-                mintVolumes
+                mintVolumes,
+                entityMap // Pass entity map for O(1) lookup
               );
               
               // Ensure SOL mint node exists
@@ -666,7 +711,8 @@ export const processTransactionData = async (
                   nodes,
                   links,
                   addressVolumes,
-                  mintVolumes
+                  mintVolumes,
+                  entityMap // Pass entity map for O(1) lookup
                 );
                 
                 // Ensure SOL mint node exists
@@ -784,21 +830,21 @@ export const processTransactionData = async (
       node.txCount = volumeData.txCount;
     }
   }
-  // Check for known entities and enrich node data
+
+  // Check for known entities and enrich node data - now using O(1) lookup with entityMap
   for (const [address, node] of nodes.entries()) {
-    // Check if this address is a known entity
-    entities.forEach((entity: Entity) => {
-      if (entity.address === address) {
-        node.icon = entity.icon
-        node.label = entity.name;
-        node.tokenSymbol = entity.name;
-        node.type = mapEntityTypeToNodeType(entity.type);
-        node.entityType = entity.type;
-        node.verified = entity.verified;
-        node.description = entity.description;
-        node.website = entity.website;
-      }
-    })
+    // Fast O(1) lookup from entity map
+    const entity = entityMap.get(address) || entityCache.getEntity(address);
+    if (entity) {
+      node.icon = entity.icon;
+      node.label = entity.name;
+      node.tokenSymbol = entity.name;
+      node.type = mapEntityTypeToNodeType(entity.type);
+      node.entityType = entity.type;
+      node.verified = entity.verified;
+      node.description = entity.description;
+      node.website = entity.website;
+    }
   }
 
   // Enhance nodes with visual information
@@ -860,7 +906,7 @@ export const processTransactionData = async (
   };
 };
 
-// Helper function for processing token transfers through mint nodes
+// Helper function for processing token transfers through mint nodes - updated for O(1) entity lookup
 function processTokenTransferThroughMint(
   senderAddress,
   receiverAddress,
@@ -871,18 +917,22 @@ function processTokenTransferThroughMint(
   nodes,
   links,
   addressVolumes,
-  mintVolumes
+  mintVolumes,
+  entityMap // New parameter to receive entity map
 ) {
   // Ensure sender node exists
   if (!nodes.has(senderAddress)) {
+    // Fast entity lookup using provided entityMap or cache
+    const entity = entityMap ? entityMap.get(senderAddress) : entityCache.getEntity(senderAddress);
+    
     nodes.set(senderAddress, {
       id: senderAddress,
       group: 2,
-      type: 'user',
+      type: entity ? mapEntityTypeToNodeType(entity.type) : 'user',
       tokenType: 'wallet',
       volume: 0,
-      label: '',
-      verified: false,
+      label: entity ? entity.name : '',
+      verified: entity ? entity.verified : false,
       inVolume: 0,
       outVolume: 0,
       netVolume: 0,
@@ -901,14 +951,17 @@ function processTokenTransferThroughMint(
   
   // Ensure receiver node exists
   if (!nodes.has(receiverAddress)) {
+    // Fast entity lookup using provided entityMap or cache
+    const entity = entityMap ? entityMap.get(receiverAddress) : entityCache.getEntity(receiverAddress);
+    
     nodes.set(receiverAddress, {
       id: receiverAddress,
       group: 2,
-      type: 'user',
+      type: entity ? mapEntityTypeToNodeType(entity.type) : 'user',
       tokenType: 'wallet',
       volume: 0,
-      label: '',
-      verified: false,
+      label: entity ? entity.name : '',
+      verified: entity ? entity.verified : false,
       inVolume: 0,
       outVolume: 0,
       netVolume: 0,
@@ -992,76 +1045,6 @@ function processTokenTransferThroughMint(
   }
 }
 
-// Token price mapping and helper functions (unchanged)
-// const TOKEN_PRICES = {
-//   'SOL': 120.00, // Example price in USD
-//   // Add other token prices as needed
-// };
-
-// // Get token price by mint or symbol
-// const getTokenPrice = (mint: string, symbol: string) => {
-//   // First try to get by symbol
-//   if (symbol && TOKEN_PRICES[symbol]) {
-//     return TOKEN_PRICES[symbol];
-//   }
-  
-//   // Hardcoded prices for common tokens by mint
-//   const MINT_TO_PRICE = {
-//     'So11111111111111111111111111111111111111112': 120.00, // SOL
-//     '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs': 1.00,  // USDC on Solana
-//     'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So': 125.00, // mSOL
-//   };
-  
-//   if (mint && MINT_TO_PRICE[mint]) {
-//     return MINT_TO_PRICE[mint];
-//   }
-  
-//   // Default price fallback
-//   return 1.00; // Default to 1 USD if token price is unknown
-// };
-
-// Map entity types to node types
-// function mapEntityTypeToNodeType(entityType: string): string {
-//   const typeMap = {
-//     'exchange': 'cex',
-//     'nft_marketplace': 'dex',
-//     'defi_protocol': 'dex',
-//     'token': 'contract',
-//     'project': 'contract',
-//     'foundation': 'cex'
-//   };
-  
-//   return typeMap[entityType] || 'user';
-// }
-
-// Helper function to detect if a program is a DEX
-function isDexProgram(programId: string): boolean {
-  const DEX_PROGRAMS = [
-    'JUP', // Jupiter
-    'ORCA', // Orca
-    'RAY',  // Raydium
-    'OPENBOOK',
-    'SERUM'
-  ];
-  
-  return programId && DEX_PROGRAMS.some(id => programId.includes(id));
-}
-
-// Helper function to detect address type based on program interactions
-function detectAddressType(address: string, programId: string): string {
-  // Known program IDs for categorization
-  if (isDexProgram(programId)) {
-    return 'dex';
-  }
-  
-  // Check if address starts with known prefixes
-  if (address.startsWith('11111111')) {
-    return 'contract';
-  }
-  
-  return 'unknown';
-}
-
 // Map entity types to node types
 function mapEntityTypeToNodeType(entityType: string): string {
   const typeMap = {
@@ -1070,7 +1053,6 @@ function mapEntityTypeToNodeType(entityType: string): string {
     'defi_protocol': 'dex',
     'token': 'contract',
     'project': 'contract',
-    'DAPP': 'contract',
     'foundation': 'cex'
   };
   

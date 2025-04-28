@@ -3,7 +3,7 @@ import * as d3 from 'd3';
 import { formatAddress } from '@/lib/utils';
 import { TransactionCluster } from '@/lib/transactionClustering';
 import { Entity } from '@/types';
-import { entities as knownEntities } from '@/lib/data'; // Import real entity data
+import { entityCache } from '@/lib/EntityCacheService';
 
 // Constants for risk assessment - similar to those in transactionClustering.ts
 const LARGE_VALUE_THRESHOLD = 1000; // SOL
@@ -49,25 +49,25 @@ const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
     y: 0
   });
 
-  // Build a lookup map for known entities
+  // Initialize entity cache on mount
+  useEffect(() => {
+    entityCache.initialize();
+  }, []);
+
+  // Build a lookup map for known entities (now using our cache)
   const entityMap = React.useMemo(() => {
     const map = new Map<string, Entity>();
-    if (knownEntities && Array.isArray(knownEntities)) {
-      knownEntities.forEach(entity => {
-        map.set(entity.address, entity);
-        
-        // Also map related addresses
-        if (entity.relatedAddresses && Array.isArray(entity.relatedAddresses)) {
-          entity.relatedAddresses.forEach(addr => {
-            if (!map.has(addr)) {
-              map.set(addr, entity);
-            }
-          });
-        }
-      });
-    }
+    
+    // Initialize with cache entities for O(1) lookup
+    cluster.accounts.forEach(account => {
+      const entity = entityCache.getEntity(account);
+      if (entity) {
+        map.set(account, entity);
+      }
+    });
+    
     return map;
-  }, []);
+  }, [cluster.accounts]);
 
   // Build a map of known programs using the entity data
   const KNOWN_PROGRAMS = React.useMemo(() => {
@@ -77,17 +77,16 @@ const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
       "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL": "Assoc. Token Program",
     };
     
-    // Add all entities of type 'contract' or 'program' to the KNOWN_PROGRAMS map
-    if (knownEntities && Array.isArray(knownEntities)) {
-      knownEntities.forEach(entity => {
-        if (entity.type === 'contract' || entity.type === 'program' || entity.type === 'defi_protocol') {
-          programs[entity.address] = entity.name || formatAddress(entity.address, 8);
-        }
-      });
-    }
+    // Add all cached entities of type 'contract' or 'program' to the KNOWN_PROGRAMS map
+    cluster.accounts.forEach(account => {
+      const entity = entityCache.getEntity(account);
+      if (entity && (entity.type === 'contract' || entity.type === 'program' || entity.type === 'defi_protocol')) {
+        programs[account] = entity.name || formatAddress(account, 8);
+      }
+    });
     
     return programs;
-  }, []);
+  }, [cluster.accounts]);
   
   // Utility function to format currency values in USD
   const formatCurrency = (value: number | undefined): string => {
@@ -156,8 +155,7 @@ const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
     return 'Low Risk';
   };
   
-  // Assess risk of an account based on its activity pattern
-  // Similar to the logic in transactionClustering.ts
+  // Assess risk of an account based on its activity pattern with optimized entity lookup
   const assessAccountRisk = (accountId: string, txCount: number, volume: number, depth: number): { score: number, reasons: string[] } => {
     let score = 0;
     const reasons: string[] = [];
@@ -174,8 +172,8 @@ const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
       reasons.push(`High transaction count: ${txCount} transactions`);
     }
     
-    // Check if the account is known to be suspicious (uses a suspicious program)
-    const entity = entityMap.get(accountId);
+    // Check if the account is known to be suspicious using optimized lookup
+    const entity = entityMap.get(accountId) || entityCache.getEntity(accountId);
     if (entity && entity.type === 'mixer') {
       score += 50;
       reasons.push(`Associated with known mixer service: ${entity.name}`);
@@ -346,20 +344,6 @@ const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
           inflow = totalSolValue * receiveRatio;
           outflow = totalSolValue * (1 - receiveRatio);
         }
-        // if (depth === 0) {
-        //   // Origin mostly sends funds
-        //   inflow = totalSolValue * 0.1;
-        //   outflow = totalSolValue * 0.9;
-        // } else if (depth === 1) {
-        //   // First level receives from origin, sends to deeper
-        //   inflow = totalSolValue * 0.7;
-        //   outflow = totalSolValue * 0.3;
-        // } else {
-        //   // Deeper levels mostly receive
-        //   const receiveRatio = Math.min(0.9, 0.5 + (depth * 0.1));
-        //   inflow = totalSolValue * receiveRatio;
-        //   outflow = totalSolValue * (1 - receiveRatio);
-        // }
         
         // Calculate USD equivalents
         const usdInflow = tokenToUsd(inflow, 'SOL');
@@ -375,19 +359,19 @@ const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
       });
     }
     
-    // Create nodes for all accounts in the cluster
+    // Create nodes for all accounts in the cluster with optimized entity lookup
     cluster.accounts.forEach(account => {
       const isProgram = cluster.programs.includes(account);
       const depth = nodeDepths[account] !== undefined ? nodeDepths[account] : 999;
       const isOrigin = account === originAddress || (originAddress && account.startsWith(originAddress.substring(0, 8)));
       
-      // Find entity information if available
+      // Find entity information from cluster.entities or cache (O(1) lookup)
       const entityInfo = cluster.entities?.find(entity => 
         entity.accounts.includes(account)
       );
       
-      // Also check the global entity map
-      const knownEntity = entityMap.get(account);
+      // Also check from entityMap (O(1)) or cache (O(1))
+      const knownEntity = entityMap.get(account) || entityCache.getEntity(account);
       
       // Determine label
       let label = '';
@@ -913,8 +897,6 @@ const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
         nodeType = d.entityType.toUpperCase();
         typeColor = 'text-solana-purple';
       }
-      console.log(d);
-      
       
       // Transaction volume metrics in USD
       const volumes = accountVolumes.get(d.id) || { inflow: 0, outflow: 0, usdInflow: 0, usdOutflow: 0 };
@@ -990,8 +972,6 @@ const DepthAwareClusterGraph: React.FC<DepthAwareClusterGraphProps> = ({
           <div class="mt-1">${formatAddress(d.id, 12)}</div>
           </div>
           `;
-        //   <div class="text-muted-foreground">SOL Balance:</div>
-        //   <div class="font-medium">${solBalance}</div>
       
       setTooltip({
         visible: true,

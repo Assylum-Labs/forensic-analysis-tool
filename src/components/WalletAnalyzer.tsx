@@ -7,7 +7,7 @@ import { formatAddress } from '@/lib/utils';
 import { Loader2 } from 'lucide-react';
 import { Entity } from '@/types';
 import { useEntities } from '@/contexts/EntityContext';
-// import { entities } from '@/lib/data';
+import { entityCache } from '@/lib/EntityCacheService';
 
 interface WalletAnalyzerProps {
   address: string;
@@ -41,7 +41,6 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
     endDate: null as Date | null
   });
   const { toast } = useToast();
-  const { entities } = useEntities()
 
   // Use controlled or internal loading state
   const isLoading = controlledIsLoading !== undefined ? controlledIsLoading : internalIsLoading;
@@ -51,6 +50,11 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
   const connection = new Connection(
     process.env.NEXT_PUBLIC_SOLANA_RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com'
   );
+  
+  // Ensure cache is initialized
+  useEffect(() => {
+    entityCache.initialize();
+  }, []);
 
   useEffect(() => {
     // Set default dates if not provided
@@ -187,11 +191,14 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
         return;
       }
 
+      // Get entities from cache for processing
+      const cachedEntities = entityCache.getAllEntities();
+      
       // Step 4: Process transactions and build graph (wallet view)
       const processedData = await processTransactionData(
         transactions.filter(tx => tx !== null), 
         walletAddress,
-        entities,
+        cachedEntities, // Use cached entities instead of context entities
         'wallet'
       );
 
@@ -201,7 +208,7 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
       const tokenProcessedData = await processTransactionData(
         transactions.filter(tx => tx !== null), 
         walletAddress,
-        entities,
+        cachedEntities, // Use cached entities
         'token'
       );
       
@@ -219,6 +226,7 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
         description: error.message || "Failed to analyze wallet",
         variant: "destructive"
       });
+    } finally {
       setIsLoading(false);
     }
   };

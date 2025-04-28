@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { DashboardLayout } from '@/components/layouts/DashboardLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,7 +19,7 @@ import {
 import { Connection, PublicKey } from '@solana/web3.js';
 import { processTransactionFlow } from '@/lib/transactionProcessor';
 import TransactionFlowGraph from '@/components/TransactionFlowGraph';
-import { useEntities } from '@/contexts/EntityContext';
+import { entityCache } from '@/lib/EntityCacheService';
 
 export default function TransactionAnalysisPage() {
   const [signature, setSignature] = useState('');
@@ -30,7 +30,12 @@ export default function TransactionAnalysisPage() {
   const [criticalPath, setCriticalPath] = useState([]);
   const [showCriticalPath, setShowCriticalPath] = useState(true);
   const { toast } = useToast();
-  const { entities } = useEntities()
+
+  // Initialize the entity cache on mount
+  useEffect(() => {
+    // Ensure entity cache is initialized
+    entityCache.initialize();
+  }, []);
 
   const handleSignatureChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSignature(e.target.value);
@@ -65,8 +70,11 @@ export default function TransactionAnalysisPage() {
       
       setTransactionData(transaction);
       
-      // Process transaction to get fund flows
-      const { graphData, type, critical } = await processTransactionFlow(transaction, entities);
+      // Use cached entities directly from the cache service
+      const cachedEntities = entityCache.getAllEntities();
+      
+      // Process transaction to get fund flows using cached entities
+      const { graphData, type, critical } = await processTransactionFlow(transaction, cachedEntities);
       setFlowGraphData(graphData);
       setTransactionType(type);
       setCriticalPath(critical);
@@ -98,16 +106,6 @@ export default function TransactionAnalysisPage() {
                 Analyze a single transaction to understand the flow of funds
               </p>
             </div>
-            {/* <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm">
-                <Filter className="mr-2 h-4 w-4" />
-                Filters
-              </Button>
-              <Button variant="outline" size="sm">
-                <Download className="mr-2 h-4 w-4" />
-                Export
-              </Button>
-            </div> */}
           </div>
           
           <form onSubmit={analyzeTransaction} className="mt-4 flex gap-2">

@@ -4,8 +4,9 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useCa
 import { Entity } from '@/types';
 import { toast } from '@/components/ui/use-toast';
 import EntityService, { EntityFilters, PaginatedResult } from '@/lib/api-service';
+import { entityCache } from '@/lib/EntityCacheService';
 
-// Define the context type with pagination
+// Define the context type with pagination and cache
 interface EntityContextType {
   entities: Entity[];
   isLoading: boolean;
@@ -25,6 +26,9 @@ interface EntityContextType {
   setCurrentPage: (page: number) => void;
   setPageSize: (size: number) => void;
   setFilters: (filters: Partial<EntityFilters>) => void;
+  // New cache-specific methods
+  clearEntityCache: () => void;
+  forceRefreshCache: () => Promise<void>;
 }
 
 // Create the context
@@ -38,6 +42,35 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
   const [filters, setFilters] = useState<EntityFilters>({});
+  const [cacheInitialized, setCacheInitialized] = useState<boolean>(false);
+
+  // Initialize the cache on mount
+  useEffect(() => {
+    // Initialize the entity cache
+    entityCache.initialize();
+    setCacheInitialized(true);
+    
+    // Check if we need to refresh from server
+    if (entityCache.needsRefresh()) {
+      // Only load all entities for cache if it needs refreshing
+      loadAllEntitiesForCache();
+    }
+  }, []);
+
+  // Load all entities for the cache - separate from pagination
+  const loadAllEntitiesForCache = async () => {
+    try {
+      // Load all entities without pagination for the cache
+      const allEntities = await EntityService.getEntities({ limit: 1500 });
+      
+      // Update the cache with all entities
+      entityCache.updateCache(allEntities.entities);
+      
+      console.log(`Cache refreshed with ${allEntities.entities.length} entities`);
+    } catch (error) {
+      console.error('Failed to load entities for cache:', error);
+    }
+  };
 
   // Memoized fetchEntities function to prevent recreation on each render
   const fetchEntities = useCallback(async () => {
@@ -57,6 +90,9 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       const data = await EntityService.getEntities(apiFilters);
       setEntities(data.entities);
       setTotalEntities(data.total);
+      
+      // Update cache with these entities as well
+      entityCache.updateCache(data.entities);
     } catch (error) {
       console.error('Failed to fetch entities:', error);
       toast({
@@ -75,7 +111,7 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   // Initial load of entities and when dependencies change
   useEffect(() => {
     fetchEntities();
-  }, [fetchEntities]); // Since fetchEntities is memoized, this won't create an infinite loop
+  }, [fetchEntities]);
 
   // Add a new entity
   const addEntity = async (entityData: Omit<Entity, 'createdAt' | 'updatedAt'>): Promise<Entity> => {
@@ -102,6 +138,9 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         // If we're not on the first page, refresh the entity list
         await fetchEntities();
       }
+      
+      // Update the cache
+      entityCache.updateEntity(newEntity);
       
       toast({
         title: 'Entity Added',
@@ -132,6 +171,9 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           entity.address === address ? updatedEntity : entity
         )
       );
+      
+      // Update the cache
+      entityCache.updateEntity(updatedEntity);
 
       toast({
         title: 'Entity Updated',
@@ -163,6 +205,9 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       // Update local state
       setEntities(prev => prev.filter(e => e.address !== address));
       setTotalEntities(prev => prev - 1);
+      
+      // Remove from cache
+      entityCache.removeEntity(address);
 
       toast({
         title: 'Entity Deleted',
@@ -204,6 +249,9 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           entity.address === address ? updatedEntity : entity
         )
       );
+      
+      // Update cache
+      entityCache.updateEntity(updatedEntity);
 
       toast({
         title: 'Related Address Added',
@@ -234,6 +282,9 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           entity.address === address ? updatedEntity : entity
         )
       );
+      
+      // Update cache
+      entityCache.updateEntity(updatedEntity);
 
       toast({
         title: 'Related Address Removed',
@@ -252,17 +303,10 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
   };
 
-  // Get an entity by address
+  // Get an entity by address - now uses cache for O(1) lookup
   const getEntityByAddress = (address: string): Entity | undefined => {
-    // First try direct match
-    let entity = entities.find(e => e.address === address);
-    
-    // If not found, check related addresses
-    if (!entity) {
-      entity = entities.find(e => e.relatedAddresses.includes(address));
-    }
-    
-    return entity;
+    // First check the cache for O(1) lookup
+    return entityCache.getEntity(address);
   };
 
   // Search entities by name, address, or related addresses
@@ -277,6 +321,10 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       
       // Make API request
       const data = await EntityService.getEntities(searchFilters);
+      
+      // Update cache with search results
+      entityCache.updateCache(data.entities);
+      
       return data;
     } catch (error) {
       console.error('Failed to search entities:', error);
@@ -294,6 +342,36 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   // Force refresh entities
   const refreshEntities = async (): Promise<void> => {
     await fetchEntities();
+  };
+  
+  // Clear the entity cache
+  const clearEntityCache = (): void => {
+    entityCache.clearCache();
+    toast({
+      title: 'Cache Cleared',
+      description: 'Entity cache has been cleared'
+    });
+  };
+  
+  // Force a full cache refresh from server
+  const forceRefreshCache = async (): Promise<void> => {
+    setIsLoading(true);
+    try {
+      await loadAllEntitiesForCache();
+      toast({
+        title: 'Cache Refreshed',
+        description: `Entity cache refreshed with ${entityCache.size()} entities`
+      });
+    } catch (error) {
+      console.error('Failed to refresh cache:', error);
+      toast({
+        title: 'Error',
+        description: error.message || 'Failed to refresh entity cache',
+        variant: 'destructive'
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Handle filter changes in a way that avoids infinite loops
@@ -327,7 +405,9 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     refreshEntities,
     setCurrentPage,
     setPageSize,
-    setFilters: handleSetFilters
+    setFilters: handleSetFilters,
+    clearEntityCache,
+    forceRefreshCache
   };
 
   return (

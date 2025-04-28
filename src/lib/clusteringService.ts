@@ -3,6 +3,7 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import { clusterTransactions, TransactionCluster, findRelatedWallets, identifyWalletRings } from './transactionClustering';
 import { formatAddress } from './utils';
 import { Entity } from '@/types';
+import { entityCache } from './EntityCacheService';
 
 // In-memory cache for clustering results
 const clusteringCache = new Map<string, {
@@ -33,8 +34,7 @@ export async function fetchAndClusterTransactions(
     batchSize?: number,
     filterType?: string,
     enrichWithEntities?: boolean,
-    entities?: Entity[],
-    maxDepth?: number // New parameter for depth control
+    maxDepth?: number // Parameter for depth control
   } = {}
 ) {
   const {
@@ -45,7 +45,6 @@ export async function fetchAndClusterTransactions(
     batchSize = 100,
     filterType,
     enrichWithEntities = true,
-    entities = [],
     maxDepth = Infinity // Default to unlimited depth
   } = options;
 
@@ -92,6 +91,8 @@ export async function fetchAndClusterTransactions(
   }
 
   try {
+    // Initialize entity cache for faster entity lookups
+    entityCache.initialize();
 
     // Real implementation would use actual blockchain data:
     const connection = new Connection(
@@ -157,10 +158,12 @@ export async function fetchAndClusterTransactions(
       );
     }
     
-    // Enrich clusters with entity information
-    if (enrichWithEntities && entities.length > 0) {
-      enrichClustersWithEntities(filteredClusters, entities);
-      enrichClustersWithEntities(flaggedClusters, entities);
+    // Use cached entities for O(1) lookup performance instead of querying on each entity
+    if (enrichWithEntities) {
+      // Get entities from cache
+      const cachedEntities = entityCache.getAllEntities();
+      enrichClustersWithEntities(filteredClusters, cachedEntities);
+      enrichClustersWithEntities(flaggedClusters, cachedEntities);
     }
     
     // Find related wallet groups
@@ -335,21 +338,32 @@ async function fetchTransactionsFromSignatures(
   }
 }
 
-// Enrich clusters with entity information
+// Enrich clusters with entity information - optimized to use O(1) lookups
 function enrichClustersWithEntities(
   clusters: TransactionCluster[],
   entities: Entity[]
 ) {
-  // Build a lookup map for quick entity reference
+  // Now we use O(1) lookups with a Map instead of array scanning
   const entityMap = new Map<string, Entity>();
+  
+  if (!Array.isArray(entities)) {
+    // We might already have cached entities in the optimal format
+    entities = entityCache.getAllEntities();
+  }
+  
+  // Build entity map for fast lookups
   entities.forEach(entity => {
     entityMap.set(entity.address, entity);
     
-    // Also map related addresses
-    if (entity.relatedAddresses) {
-      entity.relatedAddresses.forEach(addr => {
-        if (!entityMap.has(addr)) {
-          entityMap.set(addr, entity);
+    // Also map related addresses for O(1) lookup
+    if (entity.relatedAddresses && entity.relatedAddresses.length > 0) {
+      entity.relatedAddresses.forEach(relAddr => {
+        if (!entityMap.has(relAddr)) {
+          entityMap.set(relAddr, {
+            ...entity,
+            address: relAddr,
+            isRelatedAddress: true
+          });
         }
       });
     }
@@ -357,7 +371,7 @@ function enrichClustersWithEntities(
   
   // Enrich each cluster
   clusters.forEach(cluster => {
-    // Add entity information for each account
+    // Add entity information for each account with O(1) lookup
     const knownEntities = new Map<string, {
       name: string,
       type: string,
@@ -365,8 +379,9 @@ function enrichClustersWithEntities(
       accounts: Set<string>
     }>();
     
+    // O(1) lookup for each account
     cluster.accounts.forEach(account => {
-      const entity = entityMap.get(account);
+      const entity = entityMap.get(account) || entityCache.getEntity(account);
       if (entity) {
         // Track entity information
         if (!knownEntities.has(entity.name)) {
@@ -440,134 +455,3 @@ export function getClusteringStats(clusters: TransactionCluster[]) {
     totalAccounts: stats.totalAccounts.size
   };
 }
-
-// Generate sample clusters for demo mode
-// function generateSampleClusters(searchQuery: string, maxDepth: number = Infinity) {
-//   // Use the search query as a seed for pseudo-random generation
-//   const seed = searchQuery.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  
-//   // Create a simple random function with the seed
-//   const random = () => {
-//     const x = Math.sin(seed++) * 10000;
-//     return x - Math.floor(x);
-//   };
-  
-//   // Generate accounts with depth information
-//   const generateAccounts = (count: number) => {
-//     // Start with the search query as the central account if it looks like an address
-//     const centralAccount = searchQuery.length >= 32 ? searchQuery : `wallet${Math.floor(random() * 1000000)}`;
-    
-//     const accounts = [centralAccount];
-//     const depthMap = { [centralAccount]: 0 }; // Central account has depth 0
-    
-//     // Generate additional accounts with increasing depth
-//     let currentDepth = 1;
-//     let accountsAtCurrentDepth = 1;
-    
-//     for (let i = 1; i < count; i++) {
-//       // If we've reached max depth, stop adding new depths
-//       if (currentDepth > maxDepth) {
-//         break;
-//       }
-      
-//       const account = `wallet${Math.floor(random() * 1000000)}`;
-//       accounts.push(account);
-//       depthMap[account] = currentDepth;
-      
-//       // Every N accounts, increase the depth level
-//       accountsAtCurrentDepth--;
-//       if (accountsAtCurrentDepth <= 0) {
-//         currentDepth++;
-//         // Each depth level has more accounts than the previous one
-//         accountsAtCurrentDepth = Math.min(count - i, Math.floor(3 * Math.pow(2, currentDepth - 1)));
-//       }
-//     }
-    
-//     return { accounts, depthMap };
-//   };
-  
-//   // Generate sample clusters
-//   const clusterCount = 3 + Math.floor(random() * 5);
-//   const clusters = [];
-//   const programs = [
-//     "11111111111111111111111111111111", // System Program
-//     "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", // Token Program
-//     "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", // Jupiter
-//     "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc", // Orca
-//   ];
-  
-//   const clusterTypes = ["Sequential Transfers", "Fan-out", "Fan-in", "Swap", "Mixed Activity"];
-  
-//   for (let i = 0; i < clusterCount; i++) {
-//     const accountCount = 5 + Math.floor(random() * 20);
-//     const { accounts, depthMap } = generateAccounts(accountCount);
-    
-//     const transactionCount = 3 + Math.floor(random() * 10);
-//     const transactions = Array.from({ length: transactionCount }, (_, j) => `tx${j}${Math.floor(random() * 1000000)}`);
-    
-//     // Select a subset of programs for this cluster
-//     const clusterPrograms = programs.filter(() => random() > 0.5);
-//     if (clusterPrograms.length === 0) {
-//       clusterPrograms.push(programs[0]); // Always include at least one program
-//     }
-    
-//     const clusterType = clusterTypes[Math.floor(random() * clusterTypes.length)];
-//     const timestamp = Date.now() - Math.floor(random() * 30 * 24 * 60 * 60 * 1000); // Random time in the last 30 days
-    
-//     // Determine if this should be a suspicious cluster
-//     const isSuspicious = random() < 0.3;
-    
-//     const cluster: TransactionCluster = {
-//       id: `cluster-${i + 1}-${timestamp}`,
-//       accounts: accounts.slice(0, (maxDepth === Infinity) ? accounts.length : Math.min(accounts.length, 5 + maxDepth * 3)),
-//       transactions,
-//       programs: clusterPrograms,
-//       totalValue: Math.floor(random() * 1000) / 10,
-//       timestamp,
-//       type: clusterType,
-//       depthMap
-//     };
-    
-//     // Add risk factors for suspicious clusters
-//     if (isSuspicious) {
-//       cluster.risk = {
-//         score: 30 + Math.floor(random() * 50),
-//         reasons: [
-//           "Suspicious transaction pattern detected",
-//           random() < 0.5 ? "Large value movement in short time" : "Multiple intermediary accounts used",
-//           random() < 0.5 ? "Known high-risk program interaction" : "Circular fund flow detected"
-//         ]
-//       };
-//     }
-    
-//     clusters.push(cluster);
-//   }
-  
-//   // Flag suspicious clusters
-//   const flaggedClusters = clusters.filter(cluster => cluster.risk && cluster.risk.score >= 30);
-  
-//   // Generate wallet groups
-//   const walletGroups = {
-//     groups: Array.from({ length: 2 + Math.floor(random() * 3) }, (_, i) => {
-//       // Randomly select a subset of accounts from different clusters
-//       return Array.from({ length: 3 + Math.floor(random() * 5) }, () => {
-//         const randomCluster = clusters[Math.floor(random() * clusters.length)];
-//         const randomAccountIndex = Math.floor(random() * randomCluster.accounts.length);
-//         return randomCluster.accounts[randomAccountIndex];
-//       });
-//     }),
-//     strength: Array.from({ length: 2 + Math.floor(random() * 3) }, () => {
-//       const r = random();
-//       if (r < 0.3) return 'High';
-//       if (r < 0.7) return 'Medium';
-//       return 'Low';
-//     }) as ('High' | 'Medium' | 'Low')[]
-//   };
-  
-//   return {
-//     clusters,
-//     flaggedClusters,
-//     walletGroups,
-//     ringClusters: flaggedClusters.filter(() => random() > 0.7)
-//   };
-// }
