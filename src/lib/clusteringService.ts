@@ -27,6 +27,7 @@ const CACHE_EXPIRATION = 30 * 60 * 1000;
 export async function fetchAndClusterTransactions(
   searchQuery: string,
   options: {
+    rpcEndpoint?: string,
     timeframe?: 'day' | 'week' | 'month' | 'all' | 'custom',
     startDate?: Date,
     endDate?: Date,
@@ -38,6 +39,7 @@ export async function fetchAndClusterTransactions(
   } = {}
 ) {
   const {
+    rpcEndpoint,
     timeframe = 'week',
     startDate,
     endDate = new Date(),
@@ -96,7 +98,7 @@ export async function fetchAndClusterTransactions(
 
     // Real implementation would use actual blockchain data:
     const connection = new Connection(
-      process.env.NEXT_PUBLIC_SOLANA_RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com'
+      rpcEndpoint || process.env.NEXT_PUBLIC_SOLANA_RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com'
     );
 
     // Determine if the query is a wallet address or a pattern

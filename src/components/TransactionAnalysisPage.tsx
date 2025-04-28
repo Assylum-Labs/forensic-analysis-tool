@@ -20,6 +20,7 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import { processTransactionFlow } from '@/lib/transactionProcessor';
 import TransactionFlowGraph from '@/components/TransactionFlowGraph';
 import { entityCache } from '@/lib/EntityCacheService';
+import { useRPC } from '@/contexts/RPCContext';
 
 export default function TransactionAnalysisPage() {
   const [signature, setSignature] = useState('');
@@ -29,6 +30,7 @@ export default function TransactionAnalysisPage() {
   const [transactionType, setTransactionType] = useState('');
   const [criticalPath, setCriticalPath] = useState([]);
   const [showCriticalPath, setShowCriticalPath] = useState(true);
+  const { rpcEndpoint } = useRPC()
   const { toast } = useToast();
 
   // Initialize the entity cache on mount
@@ -57,7 +59,7 @@ export default function TransactionAnalysisPage() {
     try {
       // Connect to Solana and fetch the transaction
       const connection = new Connection(
-        process.env.NEXT_PUBLIC_SOLANA_RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com'
+        rpcEndpoint || process.env.NEXT_PUBLIC_SOLANA_RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com'
       );
       
       const transaction = await connection.getTransaction(signature, {

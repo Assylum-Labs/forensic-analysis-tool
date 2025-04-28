@@ -33,6 +33,7 @@ import ClusterGraph from '@/components/ClusterGraph'
 import { fetchAndClusterTransactions, getClusteringStats } from '@/lib/clusteringService'
 import { TransactionCluster } from '@/lib/transactionClustering'
 import DepthControl from '@/components/DepthControl' // Import the new depth control component
+import { useRPC } from '@/contexts/RPCContext'
 // import ClusterGraph from '@/components/ClusterGraph' // Import the depth-aware graph
 
 // New interface to track network depth for nodes
@@ -69,6 +70,7 @@ export default function TransactionClusteringPage() {
   const [highlightSuspicious, setHighlightSuspicious] = useState(true)
   // const [maxDepth, setMaxDepth] = useState<number>(2) // Default to 2 hops
   const { toast } = useToast()
+  const { rpcEndpoint } = useRPC()
 
 
   const [networkDepth, setNetworkDepth] = useState(1)
@@ -128,6 +130,7 @@ export default function TransactionClusteringPage() {
     try {
       // Fetch and analyze clusters with date range and max depth
       const results = await fetchAndClusterTransactions(searchQuery, {
+        rpcEndpoint,
         timeframe,
         startDate,
         endDate,

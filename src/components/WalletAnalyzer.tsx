@@ -8,6 +8,7 @@ import { Loader2 } from 'lucide-react';
 import { Entity } from '@/types';
 import { useEntities } from '@/contexts/EntityContext';
 import { entityCache } from '@/lib/EntityCacheService';
+import { useRPC } from '@/contexts/RPCContext';
 
 interface WalletAnalyzerProps {
   address: string;
@@ -41,6 +42,7 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
     endDate: null as Date | null
   });
   const { toast } = useToast();
+  const { rpcEndpoint } = useRPC()
 
   // Use controlled or internal loading state
   const isLoading = controlledIsLoading !== undefined ? controlledIsLoading : internalIsLoading;
@@ -48,7 +50,7 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
 
   // Initialize Solana connection
   const connection = new Connection(
-    process.env.NEXT_PUBLIC_SOLANA_RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com'
+    rpcEndpoint || process.env.NEXT_PUBLIC_SOLANA_RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com'
   );
   
   // Ensure cache is initialized
