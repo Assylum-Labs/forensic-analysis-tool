@@ -18,18 +18,10 @@ import {
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
-  // { name: 'Transaction Flow', href: '/transaction-flow', icon: Network },
   { name: 'Transaction Analysis', href: '/transaction-analysis', icon: ArrowLeftRight },
   { name: 'Wallet Analysis', href: '/wallet-analysis', icon: Wallet },
   { name: 'Transaction Clustering', href: '/transaction-clustering', icon: BarChart },
   { name: 'Entity Labeling', href: '/entity-labeling', icon: Building },
-]
-
-const tools = [
-  // { name: 'Search', href: '/search', icon: Search },
-  // { name: 'Trace Explorer', href: '/trace-explorer', icon: LineChart },
-  // { name: 'Identity Resolver', href: '/identity-resolver', icon: Fingerprint },
-  // { name: 'Settings', href: '/settings', icon: Settings },
 ]
 
 export function Sidebar() {
@@ -69,33 +61,6 @@ export function Sidebar() {
                 ))}
               </ul>
             </li>
-            <li>
-              {/* <div className="text-xs font-semibold text-muted-foreground">Tools</div>
-              <ul role="list" className="mt-2 space-y-1">
-                {tools.map((item) => (
-                  <li key={item.name}>
-                    <Link
-                      href={item.href}
-                      className={cn(
-                        pathname === item.href
-                          ? 'bg-muted text-foreground'
-                          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                        'group flex gap-x-3 rounded-md p-2 text-sm leading-6'
-                      )}
-                    >
-                      <item.icon className="h-5 w-5 shrink-0" aria-hidden="true" />
-                      {item.name}
-                    </Link>
-                  </li>
-                ))}
-              </ul> */}
-            </li>
-            {/* <li className="mt-auto">
-              <div className="group -mx-2 flex gap-x-3 rounded-md p-2 text-sm font-semibold text-muted-foreground hover:bg-muted hover:text-foreground">
-                <Settings className="h-5 w-5 shrink-0" aria-hidden="true" />
-                Settings
-              </div>
-            </li> */}
           </ul>
         </nav>
       </div>

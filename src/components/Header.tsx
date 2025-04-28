@@ -41,17 +41,6 @@ export function Header() {
             />
           </form>
         </div>
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon">
-            <HelpCircleIcon className="h-5 w-5" />
-          </Button>
-          <Button variant="ghost" size="icon">
-            <BellIcon className="h-5 w-5" />
-          </Button>
-          <div className="h-8 w-8 rounded-full bg-gradient-to-r from-solana-purple to-solana-blue flex items-center justify-center text-white font-medium">
-            A
-          </div>
-        </div>
       </div>
     </header>
   )
