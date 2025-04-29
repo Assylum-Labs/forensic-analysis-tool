@@ -55,6 +55,8 @@ const EntityList: React.FC<EntityListProps> = ({
   const [showVerifiedOnly, setShowVerifiedOnly] = useState(false);
   const [selectedEntity, setSelectedEntity] = useState<Entity | null>(null);
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [entityTypes, setEntityTypes] = useState<string[]>([]);
+
   
   // Debounce search query
   useEffect(() => {
@@ -101,6 +103,14 @@ const EntityList: React.FC<EntityListProps> = ({
   useEffect(() => {
     applyFilters();
   }, [applyFilters]);
+
+  useEffect(() => {
+    if(!entities) return
+    let types = getEntityTypes(entities)
+    console.log(types);
+    
+    setEntityTypes(types)
+  },[entities])
   
   const handleDeleteEntity = async (address: string) => {
     if (confirm('Are you sure you want to delete this entity? This action cannot be undone.')) {
@@ -160,7 +170,6 @@ const EntityList: React.FC<EntityListProps> = ({
     });
   }, [setFilters]);
   
-  const entityTypes = getEntityTypes();
   
   const getEntityTypeClass = (type?: string | null) => {
     switch (type) {
@@ -208,7 +217,7 @@ const EntityList: React.FC<EntityListProps> = ({
             />
           </div>
           
-          <DropdownMenu>
+          {entityTypes && <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="sm" variant="outline">
                 <Filter className="h-4 w-4 mr-2" />
@@ -226,7 +235,7 @@ const EntityList: React.FC<EntityListProps> = ({
                     <SelectValue placeholder="All types" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All types</SelectItem>
+                    {/* <SelectItem value="all">All types</SelectItem> */}
                     {entityTypes.map(type => (
                       <SelectItem key={type} value={type}>
                         {type.replace('_', ' ')}
@@ -258,8 +267,7 @@ const EntityList: React.FC<EntityListProps> = ({
                 </Button>
               </div>
             </DropdownMenuContent>
-          </DropdownMenu>
-          
+          </DropdownMenu>}
           {onAddEntity && (
             <Button size="sm" onClick={onAddEntity}>
               Add Entity

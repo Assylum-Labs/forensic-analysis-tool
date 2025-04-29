@@ -63,7 +63,7 @@ export default function EntityLabelingPage() {
                 Identify and label exchanges, projects, and entities in the Solana ecosystem
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            {/* <div className="flex items-center gap-2">
               <Button variant="outline" size="sm">
                 <HelpCircle className="mr-2 h-4 w-4" />
                 Help
@@ -76,10 +76,10 @@ export default function EntityLabelingPage() {
                 <Download className="mr-2 h-4 w-4" />
                 Export
               </Button>
-            </div>
+            </div> */}
           </div>
           
-          <form onSubmit={handleSearch} className="mt-4 flex gap-2">
+          {/* <form onSubmit={handleSearch} className="mt-4 flex gap-2">
             <Input
               placeholder="Search entity, wallet address or label"
               value={searchQuery}
@@ -89,7 +89,7 @@ export default function EntityLabelingPage() {
             <Button type="submit" disabled={isLoading}>
               {isLoading ? "Searching..." : "Search"}
             </Button>
-          </form>
+          </form> */}
         </div>
 
         <div className="flex-1 p-4 flex flex-col gap-4 overflow-hidden">
