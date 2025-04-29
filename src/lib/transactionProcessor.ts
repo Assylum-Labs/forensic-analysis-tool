@@ -511,7 +511,8 @@ function findCriticalPath(nodes, links, transactionData, transactionType, mapped
   
   // Extract basic transaction information
   const instructions = transaction.message.instructions || transaction.message.compiledInstructions;
-  const accountKeys = transaction.message.accountKeys.map(key => key.toString());
+  const keys = transaction.message.staticAccountKeys || transaction.message.accountKeys
+  const accountKeys = keys.map(key => key.toString());
   const innerInstructions = meta.innerInstructions || [];
   const logs = meta.logMessages || [];
   

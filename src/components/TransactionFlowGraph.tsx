@@ -295,8 +295,8 @@ const TransactionFlowGraph = ({
               .attr("stroke", d => criticalPathIds.includes(d.id) ? '#EF4444' : '#ffffff')
               .attr("stroke-width", d => criticalPathIds.includes(d.id) ? 2 : 1)
               .attr("stroke-opacity", 1)
-              .transition()
-              .duration(500)
+            //   .transition()
+            //   .duration(500)
               .attr("r", d => {
                 // Dynamic size based on node importance
                 if (criticalPathIds.includes(d.id)) {
@@ -347,8 +347,8 @@ const TransactionFlowGraph = ({
             
             // Update glow effects
             g.select("circle:first-child") // Select glow circle if it exists
-              .transition()
-              .duration(300)
+            //   .transition()
+            //   .duration(300)
               .attr("stroke", d => criticalPathIds.includes(d.id) ? '#EF4444' : 'none')
               .attr("r", d => {
                 if (criticalPathIds.includes(d.id)) {
@@ -369,11 +369,11 @@ const TransactionFlowGraph = ({
     node
       .on("mouseover", (event, d) => {
         // Add hover effect
-        d3.select(event.currentTarget)
-          .select("circle")
-          .transition()
-          .duration(150)
-          .attr("stroke-width", d => criticalPathIds.includes(d.id) ? 3 : 2);
+        // d3.select(event.currentTarget)
+        //   .select("circle")
+        //   .transition()
+        //   .duration(150)
+        //   .attr("stroke-width", d => criticalPathIds.includes(d.id) ? 3 : 2);
         
         // Construct tooltip content
         const htmlContent = `
@@ -403,11 +403,11 @@ const TransactionFlowGraph = ({
       })
       .on("mouseout", (event) => {
         // Remove hover effect
-        d3.select(event.currentTarget)
-          .select("circle")
-          .transition()
-          .duration(150)
-          .attr("stroke-width", d => criticalPathIds.includes(d.id) ? 2 : 1);
+        // d3.select(event.currentTarget)
+        //   .select("circle")
+        //   .transition()
+        //   .duration(150)
+        //   .attr("stroke-width", d => criticalPathIds.includes(d.id) ? 2 : 1);
           
         setTooltip(prev => ({ ...prev, visible: false }));
       });
@@ -525,9 +525,10 @@ const TransactionFlowGraph = ({
         .iterations(3)) // More iterations for better collision detection
       .on("tick", () => {
         // Smooth node position transitions
-        node.transition()
-          .duration(50) // Short duration for responsiveness
-          .ease(d3.easeLinear) // Linear easing for smooth movement
+        node
+        // .transition()
+        //   .duration(50) // Short duration for responsiveness
+        //   .ease(d3.easeLinear) // Linear easing for smooth movement
           .attr("transform", d => `translate(${(d as any).x},${(d as any).y})`);
         
         // Update link paths with curved paths
