@@ -46,6 +46,7 @@ export function Sidebar() {
                 {navigation.map((item) => (
                   <li key={item.name}>
                     <Link
+                      prefetch={true}
                       href={item.href}
                       className={cn(
                         pathname === item.href

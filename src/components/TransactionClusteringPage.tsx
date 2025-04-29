@@ -77,6 +77,7 @@ export default function TransactionClusteringPage() {
   const [maxDepth, setMaxDepth] = useState(5)
   const [nodeDepths, setNodeDepths] = useState<NodeDepthMap>({})
   const [filteredCluster, setFilteredCluster] = useState<TransactionCluster | null>(null)
+  const [isValidAddress, setIsValidAddress] = useState(false);
 
   // Update start date when timeframe changes
   useEffect(() => {
@@ -109,10 +110,20 @@ export default function TransactionClusteringPage() {
     setEndDate(now)
   }, [timeframe])
 
+  const validateAddress = (address: string) => {
+    if (!address) return setIsValidAddress(false);
+
+    if (address.length === 44 || address.length === 32) {
+      setIsValidAddress(true);
+    } else {
+      setIsValidAddress(false);
+    }
+  };
+
   // Function to run the clustering analysis
   const handleClusterAnalysis = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!searchQuery) {
+    if (!searchQuery || !isValidAddress) {
       toast({
         title: "Error",
         description: "Please enter a search query",
@@ -398,8 +409,13 @@ export default function TransactionClusteringPage() {
               <Input
                 placeholder="Enter wallet address or token"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="flex-1"
+                onChange={(e) => {
+                  validateAddress(e.target.value)
+                  setSearchQuery(e.target.value)
+                }}
+                className={`flex-1 ${
+                  searchQuery && !isValidAddress ? 'border-red-500' : ''
+                }`}
               />
               <Button type="submit" disabled={isLoading}>
                 {isLoading ? (
@@ -674,7 +690,7 @@ export default function TransactionClusteringPage() {
                         <h3 className="font-medium">Cluster Visualization</h3>
                         {selectedCluster && filteredCluster && (
                           <p className="text-sm text-muted-foreground">
-                            selectedCluster.type} · {filteredCluster.accounts.length}/{selectedCluster.accounts.length} accounts visible · Depth {networkDepth}
+                            {selectedCluster.type} · {filteredCluster.accounts.length}/{selectedCluster.accounts.length} accounts visible · Depth {networkDepth}
                           </p>
                         )}
                       </div>

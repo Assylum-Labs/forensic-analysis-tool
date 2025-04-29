@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/use-toast';
-import { formatAddress } from '@/lib/utils';
+import { formatAddress, isValidSolanaSignature } from '@/lib/utils';
 import { 
   ArrowRightLeft,
   Download,
@@ -24,6 +24,7 @@ import { useRPC } from '@/contexts/RPCContext';
 
 export default function TransactionAnalysisPage() {
   const [signature, setSignature] = useState('');
+  const [isValidSignature, setIsValidSignature] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [transactionData, setTransactionData] = useState(null);
   const [flowGraphData, setFlowGraphData] = useState(null);
@@ -40,7 +41,18 @@ export default function TransactionAnalysisPage() {
   }, []);
 
   const handleSignatureChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    validateSignature(e.target.value)
     setSignature(e.target.value);
+  };
+
+  const validateSignature = (signature: string) => {
+    if (!signature) return setIsValidSignature(false);
+
+    if (isValidSolanaSignature(signature)) {
+      setIsValidSignature(true);
+    } else {
+      setIsValidSignature(false);
+    }
   };
 
   const analyzeTransaction = async (e: React.FormEvent) => {
@@ -115,7 +127,9 @@ export default function TransactionAnalysisPage() {
               placeholder="Enter transaction signature"
               value={signature}
               onChange={handleSignatureChange}
-              className="flex-1"
+              className={`flex-1 ${
+                signature && !isValidSignature ? 'border-red-500' : ''
+              }`}
             />
             <Button type="submit" disabled={isProcessing}>
               {isProcessing ? (
