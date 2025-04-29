@@ -97,8 +97,8 @@ export default function EntityLabelingPage() {
             <TabsList>
               <TabsTrigger value="entities">Known Entities</TabsTrigger>
               <TabsTrigger value="exchanges">Exchanges</TabsTrigger>
-              <TabsTrigger value="labels">Custom Labels</TabsTrigger>
-              <TabsTrigger value="detection">Pattern Detection</TabsTrigger>
+              {/* <TabsTrigger value="labels">Custom Labels</TabsTrigger>
+              <TabsTrigger value="detection">Pattern Detection</TabsTrigger> */}
             </TabsList>
             
             <TabsContent value="entities" className="flex-1 overflow-auto">
@@ -109,13 +109,13 @@ export default function EntityLabelingPage() {
               <ExchangeDetectionPanel />
             </TabsContent>
             
-            <TabsContent value="labels" className="flex-1 overflow-auto">
+            {/* <TabsContent value="labels" className="flex-1 overflow-auto">
               <CustomLabelsPanel />
             </TabsContent>
             
             <TabsContent value="detection" className="flex-1 overflow-auto">
               <PatternDetectionPanel />
-            </TabsContent>
+            </TabsContent> */}
           </Tabs>
         </div>
       </div>

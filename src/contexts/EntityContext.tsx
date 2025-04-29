@@ -29,6 +29,8 @@ interface EntityContextType {
   // New cache-specific methods
   clearEntityCache: () => void;
   forceRefreshCache: () => Promise<void>;
+  // New function to get cached entities
+  getCachedEntities: (filters?: { type?: string; verified?: boolean }) => Entity[];
 }
 
 // Create the context
@@ -386,6 +388,29 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
   }, [currentPage]);
 
+  // Get all entities as an array from cache with optional filtering
+  const getCachedEntities = (filters?: { type?: string; verified?: boolean }): Entity[] => {
+    if (!cacheInitialized) {
+      entityCache.initialize();
+    }
+    
+    // Get all entities from cache
+    let cachedEntities = entityCache.getAllEntities();
+    
+    // Apply filters if provided
+    if (filters) {
+      if (filters.type !== undefined) {
+        cachedEntities = cachedEntities.filter(entity => entity.type === filters.type);
+      }
+      
+      if (filters.verified !== undefined) {
+        cachedEntities = cachedEntities.filter(entity => entity.verified === filters.verified);
+      }
+    }
+    
+    return cachedEntities;
+  };
+
   // Context value
   const value: EntityContextType = {
     entities,
@@ -407,7 +432,8 @@ export const EntityProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setPageSize,
     setFilters: handleSetFilters,
     clearEntityCache,
-    forceRefreshCache
+    forceRefreshCache,
+    getCachedEntities
   };
 
   return (
