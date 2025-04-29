@@ -2,13 +2,19 @@ import React, { useState, useEffect } from 'react';
 import { Connection, PublicKey, TransactionResponse } from '@solana/web3.js';
 import { useToast } from '@/components/ui/use-toast';
 import ForceDirectedGraph from '@/components/ForceDirectedGraph';
-import { fetchEntityData, processTransactionData } from '@/lib/api';
+import { fetchEntityData, processTransactionData, initializeSolPrice } from '@/lib/api';
 import { formatAddress } from '@/lib/utils';
 import { Loader2 } from 'lucide-react';
 import { Entity } from '@/types';
 import { useEntities } from '@/contexts/EntityContext';
 import { entityCache } from '@/lib/EntityCacheService';
 import { useRPC } from '@/contexts/RPCContext';
+
+// Define graph data interface
+interface GraphData {
+  nodes: any[];
+  links: any[];
+}
 
 interface WalletAnalyzerProps {
   address: string;
@@ -31,8 +37,8 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
   isLoading: controlledIsLoading,
   setIsLoading: setControlledIsLoading
 }) => {
-  const [walletGraphData, setWalletGraphData] = useState(null);
-  const [tokenGraphData, setTokenGraphData] = useState(null);
+  const [walletGraphData, setWalletGraphData] = useState<GraphData | null>(null);
+  const [tokenGraphData, setTokenGraphData] = useState<GraphData | null>(null);
   const [internalIsLoading, setInternalIsLoading] = useState(false);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [tokenData, setTokenData] = useState<any>(null);
@@ -56,6 +62,8 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
   // Ensure cache is initialized
   useEffect(() => {
     entityCache.initialize();
+    // No need to initialize SOL price on every component mount
+    // It will be fetched once before analysis when needed
   }, []);
 
   useEffect(() => {
@@ -74,7 +82,11 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
        !areDatesEqual(endDate, lastAnalyzedParams.endDate));
     
     if (shouldRefresh) {
-      analyzeWallet(address, startDate, endDate);
+      // Fetch SOL price once before starting the analysis
+      // The price cache will prevent excessive API calls
+      initializeSolPrice().then(() => {
+        analyzeWallet(address, startDate, endDate);
+      });
     }
   }, [address, propStartDate, propEndDate, forceRefresh]);
 
@@ -221,7 +233,7 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
         onDataProcessed(processedData);
       }
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Analysis error:', error);
       toast({
         title: "Analysis Error",
@@ -233,7 +245,7 @@ export const WalletAnalyzer: React.FC<WalletAnalyzerProps> = ({
     }
   };
 
-  const handleNodeClick = (node) => {
+  const handleNodeClick = (node: any) => {
     if (!node) {
       setSelectedNode(null);
       return;

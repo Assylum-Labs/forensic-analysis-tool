@@ -79,6 +79,9 @@ export default function TransactionClusteringPage() {
   const [filteredCluster, setFilteredCluster] = useState<TransactionCluster | null>(null)
   const [isValidAddress, setIsValidAddress] = useState(false);
 
+  // Add transaction limit state
+  const [transactionLimit, setTransactionLimit] = useState(20)
+
   // Update start date when timeframe changes
   useEffect(() => {
     const now = new Date()
@@ -147,7 +150,8 @@ export default function TransactionClusteringPage() {
         endDate,
         filterType: filterType || undefined,
         batchSize: timeframe === 'month' || timeframe === 'all' ? 50 : 100, // Smaller batch size for longer periods
-        maxDepth // Include the maxDepth parameter
+        maxDepth, // Include the maxDepth parameter
+        limit: transactionLimit // Add transaction limit parameter
       })
       
       // Update state with results
@@ -178,7 +182,7 @@ export default function TransactionClusteringPage() {
       // Show success message
       toast({
         title: "Clustering Complete",
-        description: `Identified ${results.clusters.length} transaction clusters with max depth of ${maxDepth === Infinity ? "all" : maxDepth} hops`
+        description: `Identified ${results.clusters.length} transaction clusters from ${transactionLimit} transactions with max depth of ${maxDepth === Infinity ? "all" : maxDepth} hops`
       })
     } catch (error: any) {
       console.error("Clustering error:", error)
@@ -440,6 +444,24 @@ export default function TransactionClusteringPage() {
                 <option value="all">All Time</option>
                 <option value="custom">Custom Range</option>
               </select>
+              
+              <div className="flex items-center border border-border rounded-md text-sm p-2 bg-muted gap-2">
+                <label htmlFor="txLimit" className="text-muted-foreground whitespace-nowrap flex items-center">
+                  Tx Limit:
+                  <span className="inline-flex ml-1 cursor-help" title="Maximum number of transactions to analyze. Higher values provide more data but may take longer to process.">
+                    <HelpCircle className="h-3 w-3 text-muted-foreground/70" />
+                  </span>
+                </label>
+                <input
+                  id="txLimit"
+                  type="number"
+                  min="10"
+                  max="500"
+                  value={transactionLimit}
+                  onChange={(e) => setTransactionLimit(Math.max(10, Math.min(500, parseInt(e.target.value) || 20)))}
+                  className="w-16 bg-transparent border-0 p-0 text-right focus:outline-none focus:ring-0"
+                />
+              </div>
             </div>
           </form>
 
@@ -537,14 +559,17 @@ export default function TransactionClusteringPage() {
                   <span className="font-medium">Analyzing transactions...</span>
                 </div>
               </div>
-              <div className="w-full bg-muted/40 rounded-full h-2">
+              {/* <div className="w-full bg-muted/40 rounded-full h-2">
                 <div 
-                  className="bg-primary h-2 rounded-full transition-all animate-pulse"
-                  style={{ width: '60%' }}
+                  className="bg-primary h-2 w-full rounded-full transition-all animate-pulse"
+                  // style={{ width: '60%' }}
                 ></div>
-              </div>
+              </div> */}
               <div className="mt-2 text-sm text-muted-foreground">
                 This may take a few moments depending on the number of transactions
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Processing up to {transactionLimit} transactions
               </div>
             </div>
           )}
@@ -582,6 +607,9 @@ export default function TransactionClusteringPage() {
                 <div className="mt-2">
                   <span className="text-2xl font-bold">{clusterStats.totalTransactions}</span>
                   <span className="ml-1 text-sm text-muted-foreground">processed</span>
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  Limit: {transactionLimit}
                 </div>
               </div>
               

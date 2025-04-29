@@ -436,18 +436,6 @@ function determineClusterType(
   transactionById: Map<string, VersionedTransactionResponse>,
   entities: Map<string, Entity>
 ): string {
-  // Check program usage to determine likely type
-//   const programSet = new Set(cluster.programs);
-  
-//   // Check if swap-related programs are involved
-//   if (
-//     hasProgram(entities, KNOWN_PROGRAMS.JUPITER_PROGRAM) || 
-//     hasProgram(entities, KNOWN_PROGRAMS.ORCA_WHIRLPOOL) || 
-//     hasProgram(entities, KNOWN_PROGRAMS.RAYDIUM_SWAP) ||
-//     hasProgram(entities, KNOWN_PROGRAMS.SERUM_MARKET)
-//   ) {
-//     return "Swap";
-//   }
 
   cluster.programs.forEach((program: string) => {
     const entityData = entities.get(program)

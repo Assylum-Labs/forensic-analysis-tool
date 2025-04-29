@@ -37,21 +37,97 @@ export const fetchEntityData = async () => {
 
 // Token price mapping (simplified for demonstration)
 // In a real application, you would fetch these prices from an API
-const TOKEN_PRICES = {
-  'SOL': 120.00, // Example price in USD
+const TOKEN_PRICES: {[key: string]: number} = {
+  'SOL': 120.00, // Example price in USD (will be updated by CoinGecko API)
   // Add other token prices as needed
 };
 
+// Cache control for API calls
+const priceCache = {
+  lastFetched: 0, // Timestamp of last fetch
+  cacheDuration: 5 * 60 * 1000, // Cache duration in ms (5 minutes)
+  isFetching: false // Flag to prevent multiple simultaneous calls
+};
+
+// Fetch current SOL price from CoinGecko API
+const fetchSolPriceFromCoinGecko = async (): Promise<number> => {
+  const now = Date.now();
+  
+  // Check if we have a cached value that's still valid
+  if (now - priceCache.lastFetched < priceCache.cacheDuration) {
+    console.log('Using cached SOL price:', TOKEN_PRICES.SOL);
+    return TOKEN_PRICES.SOL;
+  }
+  
+  // If already fetching, wait for the existing fetch to complete
+  if (priceCache.isFetching) {
+    console.log('Already fetching SOL price, waiting...');
+    // Wait a bit and then return the current price (which should be updated by the ongoing fetch)
+    await new Promise(resolve => setTimeout(resolve, 500));
+    return TOKEN_PRICES.SOL;
+  }
+  
+  try {
+    priceCache.isFetching = true;
+    
+    console.log('Fetching fresh SOL price from CoinGecko');
+    const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+    
+    if (!response.ok) {
+      console.error('Failed to fetch SOL price from CoinGecko:', response.statusText);
+      return TOKEN_PRICES.SOL; // Return cached/default value if API call fails
+    }
+    
+    const data = await response.json();
+    
+    if (data && data.solana && data.solana.usd) {
+      // Update the cached value and timestamp
+      TOKEN_PRICES.SOL = data.solana.usd;
+      priceCache.lastFetched = now;
+      console.log('Updated SOL price:', TOKEN_PRICES.SOL);
+      return data.solana.usd;
+    } else {
+      return TOKEN_PRICES.SOL; // Return cached/default value if response format is unexpected
+    }
+  } catch (error) {
+    console.error('Error fetching SOL price from CoinGecko:', error);
+    return TOKEN_PRICES.SOL; // Return cached/default value on error
+  } finally {
+    priceCache.isFetching = false;
+  }
+};
+
+// Initialize SOL price - call this before analysis
+export const initializeSolPrice = async (): Promise<void> => {
+  try {
+    // The fetchSolPriceFromCoinGecko function now handles caching internally
+    // It will only make an API call if the cache is stale
+    const price = await fetchSolPriceFromCoinGecko();
+    console.log('SOL price ready for analysis:', price);
+  } catch (error) {
+    console.error('Failed to initialize SOL price:', error);
+  }
+};
+
+// No need to initialize on module load - we'll fetch only when needed
+// This prevents unnecessary API calls when the module is imported but not used
+// initializeSolPrice().catch(err => console.error('Error initializing SOL price:', err));
+
 // Get token price by mint or symbol
-const getTokenPrice = (mint: string, symbol: string) => {
-  // First try to get by symbol
+const getTokenPrice = async (mint: string, symbol: string): Promise<number> => {
+  // For SOL, get real-time price from CoinGecko
+  if (symbol === 'SOL' || mint === 'So11111111111111111111111111111111111111112') {
+    return await fetchSolPriceFromCoinGecko();
+  }
+  
+  // For other symbols, try from cached prices
   if (symbol && TOKEN_PRICES[symbol]) {
     return TOKEN_PRICES[symbol];
   }
   
   // Hardcoded prices for common tokens by mint
-  const MINT_TO_PRICE = {
-    'So11111111111111111111111111111111111111112': 120.00, // SOL
+  const MINT_TO_PRICE: {[key: string]: number} = {
+    // SOL is handled above with real-time price
     '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs': 1.00,  // USDC on Solana
     'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So': 125.00, // mSOL
   };
@@ -315,7 +391,7 @@ export const processTransactionData = async (
       
       if (diff < 0) {
         // Calculate USD value of sent tokens
-        const tokenPrice = getTokenPrice(data.mint, data.symbol);
+        const tokenPrice = await getTokenPrice(data.mint, data.symbol);
         const usdValue = Math.abs(diff) * tokenPrice;
         
         senders.push({
@@ -328,7 +404,7 @@ export const processTransactionData = async (
         });
       } else if (diff > 0) {
         // Calculate USD value of received tokens
-        const tokenPrice = getTokenPrice(data.mint, data.symbol);
+        const tokenPrice = await getTokenPrice(data.mint, data.symbol);
         const usdValue = diff * tokenPrice;
         
         receivers.push({
@@ -573,7 +649,7 @@ export const processTransactionData = async (
             if (isPrimaryWalletOrATA(receiverAddress)) continue;
             
             // Calculate USD value
-            const solPrice = getTokenPrice('So11111111111111111111111111111111111111112', 'SOL');
+            const solPrice = await getTokenPrice('So11111111111111111111111111111111111111112', 'SOL');
             const transferUsdValue = receiverGain * solPrice;
             
             if (viewMode === 'token') {
@@ -694,7 +770,7 @@ export const processTransactionData = async (
             
             if (receiverGain > 0) {
               // Calculate USD value
-              const solPrice = getTokenPrice('So11111111111111111111111111111111111111112', 'SOL');
+              const solPrice = await getTokenPrice('So11111111111111111111111111111111111111112', 'SOL');
               const transferAmount = Math.min(Math.abs(adjustedDiff), receiverGain);
               const transferUsdValue = transferAmount * solPrice;
               

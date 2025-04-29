@@ -23,13 +23,34 @@ import {
 } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 
+// Define interfaces for type safety
+interface AnalysisData {
+  stats: {
+    totalTransactions: number;
+    uniqueAddresses: number;
+  };
+  graphData: {
+    nodes: Array<{
+      id: string;
+      verified: boolean;
+    }>;
+  };
+}
+
+interface StatCardProps {
+  title: string;
+  value: string | number;
+  label: string;
+  icon: React.ReactNode;
+}
+
 export default function WalletAnalysisPage() {
   const { wallet } = useParams<{wallet: string}>();
   const router = useRouter();
   const [walletAddress, setWalletAddress] = useState('');
-  const [analysisData, setAnalysisData] = useState(null);
+  const [analysisData, setAnalysisData] = useState<AnalysisData | null>(null);
   const [isValidAddress, setIsValidAddress] = useState(false);
-  const [viewMode, setViewMode] = useState('wallet'); // 'wallet' or 'token'
+  const [viewMode, setViewMode] = useState<'wallet' | 'token'>('wallet');
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
@@ -88,7 +109,7 @@ export default function WalletAnalysisPage() {
   };
 
   const handleViewModeChange = (value: string) => {
-    setViewMode(value);
+    setViewMode(value as 'wallet' | 'token');
   };
 
   const handleApplyDateRange = () => {
@@ -159,7 +180,7 @@ export default function WalletAnalysisPage() {
                     </div>
                     <DatePicker
                       selected={startDate}
-                      onChange={(date) => setStartDate(date)}
+                      onChange={(date: Date | null) => date && setStartDate(date)}
                       selectsStart
                       startDate={startDate}
                       endDate={endDate}
@@ -174,7 +195,7 @@ export default function WalletAnalysisPage() {
                     </div>
                     <DatePicker
                       selected={endDate}
-                      onChange={(date) => setEndDate(date)}
+                      onChange={(date: Date | null) => date && setEndDate(date)}
                       selectsEnd
                       startDate={startDate}
                       endDate={endDate}
@@ -289,7 +310,7 @@ export default function WalletAnalysisPage() {
   );
 }
 
-const StatCard = ({ title, value, label, icon }) => (
+const StatCard = ({ title, value, label, icon }: StatCardProps) => (
   <div className="bg-card rounded-md p-4 border border-border">
     <div className="flex justify-between">
       <h3 className="text-sm font-medium text-muted-foreground">{title}</h3>
