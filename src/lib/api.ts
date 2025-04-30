@@ -3,7 +3,7 @@ import { Transaction, VersionedTransactionResponse } from "@solana/web3.js";
 import { entityCache } from "./EntityCacheService";
 
 // Base API configuration
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/api';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 // Entity data fetching - but now we use cache first if available
 export const fetchEntityData = async () => {
