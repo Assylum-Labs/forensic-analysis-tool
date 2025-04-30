@@ -16,6 +16,10 @@ import {
   ArrowLeftRight
 } from 'lucide-react'
 
+interface SidebarProps {
+  mobile?: boolean;
+}
+
 const navigation = [
   { name: 'Dashboard', href: '/', icon: Home },
   { name: 'Transaction Analysis', href: '/transaction-analysis', icon: ArrowLeftRight },
@@ -24,13 +28,13 @@ const navigation = [
   { name: 'Entity Labeling', href: '/entity-labeling', icon: Building },
 ]
 
-export function Sidebar() {
+export function Sidebar({ mobile }: SidebarProps = {}) {
   const pathname = usePathname()
 
   return (
     <div className="flex h-full flex-col bg-card border-r border-[#333]">
-      <div className="flex flex-col gap-y-5 overflow-y-auto px-6">
-        <div className="flex h-16 shrink-0 items-center">
+      <div className="flex flex-col gap-y-5 overflow-y-auto p-4 md:px-6">
+        <div className="flex h-14 md:h-16 shrink-0 items-center">
           <div className="flex items-center gap-2">
             <Network className="h-8 w-8 text-primary" />
             <span className="text-lg font-bold bg-gradient-to-r from-solana-purple to-solana-blue bg-clip-text text-transparent">
@@ -54,6 +58,7 @@ export function Sidebar() {
                           : 'text-muted-foreground hover:bg-muted hover:text-foreground',
                         'group flex gap-x-3 rounded-md p-2 text-sm leading-6'
                       )}
+                      onClick={mobile ? () => document.body.classList.remove('sidebar-open') : undefined}
                     >
                       <item.icon className="h-5 w-5 shrink-0" aria-hidden="true" />
                       {item.name}

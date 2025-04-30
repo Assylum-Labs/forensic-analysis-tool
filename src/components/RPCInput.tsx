@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useRPC } from '@/contexts/RPCContext';
@@ -22,6 +22,21 @@ const RPCInput: React.FC = () => {
   const { rpcEndpoint, setRpcEndpoint, isCustomEndpoint, resetEndpoint } = useRPC();
   const [inputValue, setInputValue] = useState(rpcEndpoint);
   const [open, setOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Check screen size to determine if mobile
+  useEffect(() => {
+    const checkIfMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    
+    checkIfMobile();
+    window.addEventListener('resize', checkIfMobile);
+    
+    return () => {
+      window.removeEventListener('resize', checkIfMobile);
+    };
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,11 +62,12 @@ const RPCInput: React.FC = () => {
           size="sm" 
           className={cn(
             "flex items-center gap-2",
+            isMobile && "px-2",
             isCustomEndpoint && "border-amber-500 text-amber-500 hover:text-amber-600 hover:border-amber-600"
           )}
         >
           <Server className="h-4 w-4" />
-          {isCustomEndpoint ? 'Custom RPC' : 'RPC Endpoint'}
+          {!isMobile ? (isCustomEndpoint ? 'Custom RPC' : 'RPC Endpoint') : ''}
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-80">

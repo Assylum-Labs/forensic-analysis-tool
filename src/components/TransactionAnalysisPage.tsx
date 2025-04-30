@@ -22,9 +22,13 @@ import TransactionFlowGraph from '@/components/TransactionFlowGraph';
 import { entityCache } from '@/lib/EntityCacheService';
 import { useRPC } from '@/contexts/RPCContext';
 
-export default function TransactionAnalysisPage() {
-  const [signature, setSignature] = useState('');
-  const [isValidSignature, setIsValidSignature] = useState(false);
+interface TransactionAnalysisPageProps {
+  initialSignature?: string;
+}
+
+export default function TransactionAnalysisPage({ initialSignature }: TransactionAnalysisPageProps = {}) {
+  const [signature, setSignature] = useState(initialSignature || '');
+  const [isValidSignature, setIsValidSignature] = useState(initialSignature ? isValidSolanaSignature(initialSignature) : false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [transactionData, setTransactionData] = useState(null);
   const [flowGraphData, setFlowGraphData] = useState(null);
@@ -34,11 +38,19 @@ export default function TransactionAnalysisPage() {
   const { rpcEndpoint } = useRPC()
   const { toast } = useToast();
 
-  // Initialize the entity cache on mount
+  // Initialize the entity cache on mount and analyze if initialSignature is provided
   useEffect(() => {
     // Ensure entity cache is initialized
     entityCache.initialize();
-  }, []);
+    
+    // If initialSignature is provided, analyze it automatically
+    if (initialSignature && isValidSolanaSignature(initialSignature) && !transactionData) {
+      // Create a synthetic event object
+      const event = { preventDefault: () => {} } as React.FormEvent;
+      analyzeTransaction(event);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSignature]);
 
   const handleSignatureChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     validateSignature(e.target.value)

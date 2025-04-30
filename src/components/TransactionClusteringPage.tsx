@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
-import { formatAddress } from '@/lib/utils'
+import { formatAddress, validateAddress } from '@/lib/utils'
 import DatePicker from 'react-datepicker'
 import "react-datepicker/dist/react-datepicker.css"
 import { 
@@ -41,9 +41,12 @@ interface NodeDepthMap {
   [key: string]: number;
 }
 
+interface TransactionClusteringPageProps {
+  initialTokenAddress?: string;
+}
 
-export default function TransactionClusteringPage() {
-  const [searchQuery, setSearchQuery] = useState('')
+export default function TransactionClusteringPage({ initialTokenAddress }: TransactionClusteringPageProps = {}) {
+  const [searchQuery, setSearchQuery] = useState(initialTokenAddress || '')
   const [isLoading, setIsLoading] = useState(false)
   const [timeframe, setTimeframe] = useState<'day' | 'week' | 'month' | 'all' | 'custom'>('week')
   const [startDate, setStartDate] = useState(() => {
@@ -113,20 +116,34 @@ export default function TransactionClusteringPage() {
     setEndDate(now)
   }, [timeframe])
 
-  const validateAddress = (address: string) => {
-    if (!address) return setIsValidAddress(false);
-
-    if (address.length === 44 || address.length === 32) {
-      setIsValidAddress(true);
-    } else {
-      setIsValidAddress(false);
+  // Validate input when provided through props
+  useEffect(() => {
+    if (initialTokenAddress) {
+      // Use imported validateAddress
+      if (validateAddress(initialTokenAddress)) {
+        setIsValidAddress(true);
+        setSearchQuery(initialTokenAddress)
+        
+        // If valid address and no analysis in progress, trigger analysis automatically
+        if (!isLoading && !clusteringResults) {
+          const fakeEvent = { preventDefault: () => {} } as React.FormEvent<HTMLFormElement>;
+          handleClusterAnalysis(fakeEvent, initialTokenAddress);
+        }
+      } else {
+        setIsValidAddress(false);
+      }
     }
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTokenAddress]);
 
   // Function to run the clustering analysis
-  const handleClusterAnalysis = async (e: React.FormEvent) => {
+  const handleClusterAnalysis = async (e: React.FormEvent, tempAddress?: string) => {
     e.preventDefault()
-    if (!searchQuery || !isValidAddress) {
+    let query = searchQuery
+
+    if (tempAddress) {
+      query = tempAddress 
+    } else if (!query || !isValidAddress) {
       toast({
         title: "Error",
         description: "Please enter a search query",
@@ -140,10 +157,9 @@ export default function TransactionClusteringPage() {
     setSelectedCluster(null)
     setFilteredCluster(null)
     setNodeDepths({})
-    
     try {
       // Fetch and analyze clusters with date range and max depth
-      const results = await fetchAndClusterTransactions(searchQuery, {
+      const results = await fetchAndClusterTransactions(query!, {
         rpcEndpoint,
         timeframe,
         startDate,
@@ -414,7 +430,6 @@ export default function TransactionClusteringPage() {
                 placeholder="Enter wallet address or token"
                 value={searchQuery}
                 onChange={(e) => {
-                  validateAddress(e.target.value)
                   setSearchQuery(e.target.value)
                 }}
                 className={`flex-1 ${

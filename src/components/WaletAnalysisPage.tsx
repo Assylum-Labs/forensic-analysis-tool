@@ -6,7 +6,7 @@ import WalletAnalyzer from '@/components/WalletAnalyzer';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/ui/use-toast';
-import { formatAddress } from '@/lib/utils';
+import { formatAddress, validateAddress } from '@/lib/utils';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
@@ -22,6 +22,8 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
+import { WalletAnalyzer as WalletAnalyzerComponent } from '@/components/WalletAnalyzer';
+import { useRPC } from '@/contexts/RPCContext';
 
 // Define interfaces for type safety
 interface AnalysisData {
@@ -44,22 +46,31 @@ interface StatCardProps {
   icon: React.ReactNode;
 }
 
-export default function WalletAnalysisPage() {
+interface WalletAnalysisPageProps {
+  initialWalletAddress?: string;
+}
+
+export default function WalletAnalysisPage({ initialWalletAddress }: WalletAnalysisPageProps = {}) {
   const { wallet } = useParams<{wallet: string}>();
   const router = useRouter();
-  const [walletAddress, setWalletAddress] = useState('');
+  const [walletAddress, setWalletAddress] = useState(initialWalletAddress || '');
   const [analysisData, setAnalysisData] = useState<AnalysisData | null>(null);
-  const [isValidAddress, setIsValidAddress] = useState(false);
+  const [isValidAddress, setIsValidAddress] = useState(initialWalletAddress ? validateAddress(initialWalletAddress) : false);
   const [viewMode, setViewMode] = useState<'wallet' | 'token'>('wallet');
   const [isLoading, setIsLoading] = useState(false);
-  const { toast } = useToast();
-
-  // Date range state
+  const [graphData, setGraphData] = useState(null);
+  const [timeframe, setTimeframe] = useState<'day' | 'week' | 'month' | 'all'>('week');
   const [startDate, setStartDate] = useState(() => {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+    const date = new Date();
+    date.setDate(date.getDate() - 7); // Default to a week ago
+    return date;
   });
   const [endDate, setEndDate] = useState(new Date());
+  const [selectedNode, setSelectedNode] = useState(null);
+  const { toast } = useToast();
+  const { rpcEndpoint } = useRPC()
+
+  // Date range state
   const [dateRangeApplied, setDateRangeApplied] = useState(false);
 
   useEffect(() => {
@@ -68,6 +79,15 @@ export default function WalletAnalysisPage() {
       setWalletAddress(wallet);
     }
   }, [wallet]);
+
+  useEffect(() => {
+    // If initialWalletAddress is provided, analyze it automatically
+    if (initialWalletAddress && validateAddress(initialWalletAddress) && !isLoading && !graphData) {
+      const fakeEvent = { preventDefault: () => {} } as React.FormEvent<HTMLFormElement>;
+      analyzeWallet(fakeEvent, initialWalletAddress);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialWalletAddress]);
 
   const handleAddressInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const address = e.target.value;
@@ -85,16 +105,6 @@ export default function WalletAnalysisPage() {
         description: "Please enter a valid Solana wallet address",
         variant: "destructive"
       });
-    }
-  };
-
-  const validateAddress = (address: string) => {
-    if (!address) return setIsValidAddress(false);
-
-    if (address.length === 44 || address.length === 32) {
-      setIsValidAddress(true);
-    } else {
-      setIsValidAddress(false);
     }
   };
 
@@ -138,6 +148,53 @@ export default function WalletAnalysisPage() {
       title: "Reset Date Range",
       description: "Analyzing transactions from the last month"
     });
+  };
+
+  const analyzeWallet = async (e: React.FormEvent, tempAddress?: string) => {
+    e.preventDefault();
+    let query = walletAddress
+
+    if (tempAddress) {
+      query = tempAddress 
+    } else if (isValidAddress && query) {
+      setIsLoading(true);
+      setAnalysisData(null);
+      setGraphData(null);
+      setSelectedNode(null);
+      
+      try {
+        const response = await fetch(`${rpcEndpoint}/analyze-wallet`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ address: query })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setAnalysisData(data);
+          setGraphData(data.graphData);
+          setSelectedNode(data.graphData.nodes[0]);
+          handleAnalysisComplete(data);
+        } else {
+          toast({
+            title: "Analysis Error",
+            description: "Failed to analyze wallet",
+            variant: "destructive"
+          });
+        }
+      } catch (error) {
+        console.error("Error analyzing wallet:", error);
+        toast({
+          title: "Analysis Error",
+          description: "An error occurred while analyzing the wallet",
+          variant: "destructive"
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    }
   };
 
   return (
@@ -285,7 +342,7 @@ export default function WalletAnalysisPage() {
         <div className="flex-1 px-4 pb-4">
           {isValidAddress ? (
             <div className="h-full border border-border rounded-lg overflow-hidden">
-              <WalletAnalyzer 
+              <WalletAnalyzerComponent 
                 address={walletAddress}
                 viewMode={viewMode}
                 startDate={startDate}
