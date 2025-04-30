@@ -24,13 +24,17 @@ A comprehensive blockchain analysis tool for Solana transactions, providing powe
 ### Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/solana-forensic-tool.git
+git clone https://github.com/Assylum-Labs/forensic-analysis-tool.git
 cd solana-forensic-tool
 ```
 
 ### Backend Setup
 
 1. Navigate to the server directory:
+
+```bash
+git clone https://github.com/Assylum-Labs/forensic-tooling-server.git
+```
 
 ```bash
 cd forensic-tooling-server
