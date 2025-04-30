@@ -228,7 +228,11 @@ export async function processTransactionFlow(transaction: any) {
             type: 'transfer'
           });
           
-          // Update node volumes
+          // Make sure nodes exist for both sender and receiver
+          ensureNodeExists(address);
+          ensureNodeExists(receiverAddress);
+          
+          // Update node volumes - now we're sure the nodes exist
           nodes.find(n => n.id === address).volume = (nodes.find(n => n.id === address).volume || 1) + 1;
           nodes.find(n => n.id === receiverAddress).volume = (nodes.find(n => n.id === receiverAddress).volume || 1) + 1;
         }
@@ -352,7 +356,11 @@ export async function processTransactionFlow(transaction: any) {
           type: 'transfer'
         });
         
-        // Update node volumes
+        // Make sure nodes exist for both sender and receiver before updating volumes
+        ensureNodeExists(sender.owner);
+        ensureNodeExists(receiver.owner);
+        
+        // Update node volumes - now we're sure the nodes exist
         nodes.find(n => n.id === sender.owner).volume = (nodes.find(n => n.id === sender.owner).volume || 1) + 1;
         nodes.find(n => n.id === receiver.owner).volume = (nodes.find(n => n.id === receiver.owner).volume || 1) + 1;
       });
