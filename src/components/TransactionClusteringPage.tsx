@@ -430,6 +430,7 @@ export default function TransactionClusteringPage({ initialTokenAddress }: Trans
                 placeholder="Enter wallet address or token"
                 value={searchQuery}
                 onChange={(e) => {
+                  setIsValidAddress(validateAddress(e.target.value))
                   setSearchQuery(e.target.value)
                 }}
                 className={`flex-1 ${

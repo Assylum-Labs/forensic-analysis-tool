@@ -92,7 +92,7 @@ export default function WalletAnalysisPage({ initialWalletAddress }: WalletAnaly
   const handleAddressInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const address = e.target.value;
     setWalletAddress(address);
-    validateAddress(address);
+    setIsValidAddress(validateAddress(address));
   };
 
   const handleSubmitAddress = (e: React.FormEvent) => {

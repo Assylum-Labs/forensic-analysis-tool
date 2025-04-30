@@ -2,7 +2,10 @@
 
 A comprehensive blockchain analysis tool for Solana transactions, providing powerful visualization and investigation capabilities for forensic analysis.
 
-![Solana Forensic Analysis Tool](https://i.imgur.com/placeholder.jpg)
+**Live Demo:** [https://forensic-analysis-tool-production.up.railway.app/](https://forensic-analysis-tool-production.up.railway.app/)  
+**Backend Repository:** [https://github.com/Assylum-Labs/forensic-tooling-server](https://github.com/Assylum-Labs/forensic-tooling-server)
+
+![Solana Forensic Analysis Tool](https://res.cloudinary.com/mctursh/image/upload/v1746008863/Screenshot_2025-04-30_at_11.27.18_AM_rnyhj1.png)
 
 ## Features
 
@@ -30,13 +33,10 @@ cd solana-forensic-tool
 
 ### Backend Setup
 
-1. Navigate to the server directory:
+1. Clone the backend repository:
 
 ```bash
 git clone https://github.com/Assylum-Labs/forensic-tooling-server.git
-```
-
-```bash
 cd forensic-tooling-server
 ```
 
@@ -136,7 +136,7 @@ Analyze individual transactions to understand fund flows and identify critical p
 5. Examine the critical path highlighting the essential flow of funds
 6. Review detailed transaction information in the tabs
 
-![Transaction Analysis](https://i.imgur.com/placeholder2.jpg)
+![Transaction Analysis](https://res.cloudinary.com/mctursh/image/upload/v1746008688/Screenshot_2025-04-30_at_11.17.27_AM_rcgw0e.png)
 
 ### Wallet Analysis
 
@@ -148,6 +148,8 @@ Investigate wallet activity and connections:
 4. Toggle between "Wallet View" and "Token View"
 5. Explore the interactive graph showing connections
 6. Click on nodes to see detailed information
+
+![Wallet Analysis Tool](https://res.cloudinary.com/mctursh/image/upload/v1746008737/Screenshot_2025-04-30_at_11.25.22_AM_wkqqha.png)
 
 ### Transaction Clustering
 
